@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.elave.dashboard.sync-hourly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/tom/elave-dashboard/run-sync-hourly.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/tom/Desktop/Elave Dash Sales Report dash board</string>
+  <key>StandardOutPath</key>
+  <string>/Users/tom/Library/Logs/elave-dashboard-sync.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/tom/Library/Logs/elave-dashboard-sync.err.log</string>
+</dict>
+</plist>

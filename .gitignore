@@ -1,0 +1,8 @@
+node_modules
+dist
+.vite
+
+config.js
+public/config.js
+.env.local
+backend/.env.local
