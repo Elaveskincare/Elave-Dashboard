@@ -40,6 +40,8 @@ const GOOGLE_CALENDAR_ID = String(process.env.GOOGLE_CALENDAR_ID || "primary").t
 let runtimeGoogleRefreshToken = String(process.env.GOOGLE_CALENDAR_REFRESH_TOKEN || "").trim();
 let runtimeGoogleAccessToken = "";
 let runtimeGoogleAccessTokenExpiresAt = 0;
+const GOOGLE_REFRESH_TOKEN_COOKIE_NAME = "elave_gcal_rt";
+const GOOGLE_REFRESH_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180;
 
 const HOURLY_SELECT =
   "row_key,logged_at_utc,logged_at_local,sales_amount,orders,ad_spend,roas,source_sales,source_marketing,ingested_at_utc";
@@ -161,14 +163,25 @@ export async function handleDashboardApiRequest(req, res) {
         runtimeGoogleAccessToken = accessToken;
         runtimeGoogleAccessTokenExpiresAt = Date.now() + Math.max(30, expiresIn) * 1000;
 
-        const persistedHint = runtimeGoogleRefreshToken
-          ? "<p>Connected. For persistent login across restarts, set <code>GOOGLE_CALENDAR_REFRESH_TOKEN</code> in your server env.</p>"
-          : "<p>Connected for this runtime only. Re-auth may be needed after restart.</p>";
+        const persistedHint = refreshToken
+          ? `<p>Connected.</p><p>This browser now has a secure cookie for Calendar access. For all devices and cold starts, set <code>GOOGLE_CALENDAR_REFRESH_TOKEN</code> in Vercel using this value, then redeploy:</p><textarea readonly style="width:100%;min-height:88px;font-family:monospace;padding:10px;">${escapeHtml(
+              refreshToken
+            )}</textarea>`
+          : runtimeGoogleRefreshToken
+            ? "<p>Connected using an existing refresh token.</p><p>For reliable access on cold starts, set <code>GOOGLE_CALENDAR_REFRESH_TOKEN</code> in Vercel env.</p>"
+            : "<p>Connected for this runtime only. Re-auth may be needed after restart.</p>";
+
+        const responseHeaders = refreshToken
+          ? {
+              "Set-Cookie": buildGoogleRefreshTokenCookie(refreshToken),
+            }
+          : {};
 
         writeHtml(
           res,
           200,
-          `<h1>Google Calendar connected</h1>${persistedHint}<p>You can close this tab and refresh the dashboard.</p>`
+          `<h1>Google Calendar connected</h1>${persistedHint}<p>You can close this tab and refresh the dashboard.</p>`,
+          responseHeaders
         );
       } catch (error) {
         writeHtml(
@@ -183,6 +196,13 @@ export async function handleDashboardApiRequest(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/google/calendar/upcoming") {
+      if (!runtimeGoogleRefreshToken) {
+        const requestRefreshToken = readGoogleRefreshTokenFromRequest(req);
+        if (requestRefreshToken) {
+          runtimeGoogleRefreshToken = requestRefreshToken;
+        }
+      }
+
       const maxResults = parseLimit(url, 4, 10);
       const calendarId = sanitizeCalendarId(url.searchParams.get("calendarId") || GOOGLE_CALENDAR_ID);
       try {
@@ -515,10 +535,11 @@ function writeJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function writeHtml(res, status, html) {
+function writeHtml(res, status, html, extraHeaders = {}) {
   res.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
+    ...extraHeaders,
   });
   res.end(`<!doctype html><html><head><meta charset="utf-8" /><title>Google Calendar OAuth</title></head><body style="font-family:Arial,sans-serif;padding:20px;line-height:1.45;">${html}</body></html>`);
 }
@@ -572,6 +593,48 @@ function normalizeHostname(host) {
   } catch (_error) {
     return raw.replace(/:\d+$/, "").toLowerCase();
   }
+}
+
+function buildGoogleRefreshTokenCookie(refreshToken) {
+  const token = encodeURIComponent(String(refreshToken || "").trim());
+  return `${GOOGLE_REFRESH_TOKEN_COOKIE_NAME}=${token}; Path=/; Max-Age=${GOOGLE_REFRESH_TOKEN_COOKIE_MAX_AGE_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
+}
+
+function readGoogleRefreshTokenFromRequest(req) {
+  const cookies = parseCookieHeader(req?.headers?.cookie);
+  const token = String(cookies[GOOGLE_REFRESH_TOKEN_COOKIE_NAME] || "").trim();
+  return token;
+}
+
+function parseCookieHeader(rawCookieHeader) {
+  const header = String(rawCookieHeader || "");
+  if (!header) {
+    return {};
+  }
+
+  const cookies = {};
+  header.split(";").forEach((part) => {
+    const entry = String(part || "").trim();
+    if (!entry) {
+      return;
+    }
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      return;
+    }
+    const key = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1).trim();
+    if (!key) {
+      return;
+    }
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch (_error) {
+      cookies[key] = value;
+    }
+  });
+
+  return cookies;
 }
 
 function hasGoogleOAuthClientConfig() {
