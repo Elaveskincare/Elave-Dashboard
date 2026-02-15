@@ -80,7 +80,7 @@ const ENDPOINTS = [
 
 export async function handleDashboardApiRequest(req, res) {
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const url = new URL(req.url || "/", getRequestBaseUrl(req));
 
     if (req.method === "OPTIONS") {
       writeJson(res, 204, {});
@@ -532,15 +532,66 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function getRequestBaseUrl(req) {
+  const forwardedProto = getForwardedHeaderValue(req?.headers?.["x-forwarded-proto"]);
+  const forwardedHost = getForwardedHeaderValue(req?.headers?.["x-forwarded-host"]);
+  const host = forwardedHost || getForwardedHeaderValue(req?.headers?.host) || "localhost";
+  const protocol = normalizeRequestProtocol(forwardedProto, host);
+  return `${protocol}://${host}`;
+}
+
+function getForwardedHeaderValue(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "";
+  }
+  return text.split(",")[0].trim();
+}
+
+function normalizeRequestProtocol(candidate, host) {
+  const protocol = String(candidate || "").trim().toLowerCase();
+  if (protocol === "http" || protocol === "https") {
+    return protocol;
+  }
+  return isLocalHost(host) ? "http" : "https";
+}
+
+function isLocalHost(host) {
+  const hostname = normalizeHostname(host);
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+function normalizeHostname(host) {
+  const raw = String(host || "").trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    return new URL(`http://${raw}`).hostname.toLowerCase();
+  } catch (_error) {
+    return raw.replace(/:\d+$/, "").toLowerCase();
+  }
+}
+
 function hasGoogleOAuthClientConfig() {
   return Boolean(GOOGLE_OAUTH_CLIENT_ID && GOOGLE_OAUTH_CLIENT_SECRET);
 }
 
 function getGoogleRedirectUri(requestUrl) {
-  if (GOOGLE_OAUTH_REDIRECT_URI) {
-    return GOOGLE_OAUTH_REDIRECT_URI;
+  const fallbackRedirect = `${requestUrl.origin}/api/google/oauth/callback`;
+  if (!GOOGLE_OAUTH_REDIRECT_URI) {
+    return fallbackRedirect;
   }
-  return `${requestUrl.origin}/api/google/oauth/callback`;
+  try {
+    const configured = new URL(GOOGLE_OAUTH_REDIRECT_URI);
+    if (!isLocalHost(requestUrl.hostname) && isLocalHost(configured.hostname)) {
+      return fallbackRedirect;
+    }
+    return configured.toString();
+  } catch (_error) {
+    return fallbackRedirect;
+  }
 }
 
 function buildGoogleOAuthAuthorizeUrl(requestUrl) {

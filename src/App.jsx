@@ -3340,18 +3340,68 @@ function getQueryPasscode() {
 
 function normalizeConfig(input) {
   const passcodeValue = typeof input.passcode === "undefined" || input.passcode === null ? "" : String(input.passcode).trim();
+  const backendApiUrl = normalizeBackendApiUrl(input.backendApiUrl);
   const targetMultiplierRaw = parseNumber(input.salesTargetMultiplier);
   const targetMultiplier = Number.isFinite(targetMultiplierRaw) && targetMultiplierRaw > 0 ? targetMultiplierRaw : 1;
   const targetValueRaw = parseNumber(input.salesTargetValue);
   const targetsByMonth = normalizeSalesTargetsByMonth(input.salesTargetsByMonth);
   return {
     ...input,
+    backendApiUrl,
     currencySymbol: DASHBOARD_CURRENCY,
     passcode: passcodeValue,
     salesTargetMultiplier: targetMultiplier,
     salesTargetValue: Number.isFinite(targetValueRaw) ? targetValueRaw : null,
     salesTargetsByMonth: targetsByMonth,
   };
+}
+
+function normalizeBackendApiUrl(value) {
+  const configured = typeof value === "string" ? value.trim() : String(value || "").trim();
+  const browserOrigin = getBrowserOrigin();
+
+  if (!configured) {
+    if (!browserOrigin) {
+      return "";
+    }
+    try {
+      const current = new URL(browserOrigin);
+      return isLocalHostname(current.hostname) ? "" : browserOrigin;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  if (!/^https?:\/\//i.test(configured)) {
+    return configured;
+  }
+
+  if (!browserOrigin) {
+    return configured;
+  }
+
+  try {
+    const configuredUrl = new URL(configured);
+    const currentUrl = new URL(browserOrigin);
+    if (!isLocalHostname(currentUrl.hostname) && isLocalHostname(configuredUrl.hostname)) {
+      return browserOrigin;
+    }
+    return configured;
+  } catch (_error) {
+    return configured;
+  }
+}
+
+function getBrowserOrigin() {
+  if (typeof window === "undefined" || !window.location || !window.location.origin) {
+    return "";
+  }
+  return String(window.location.origin || "").trim();
+}
+
+function isLocalHostname(hostname) {
+  const value = String(hostname || "").trim().toLowerCase();
+  return value === "localhost" || value === "127.0.0.1" || value === "[::1]" || value === "::1";
 }
 
 function normalizeSalesTargetsByMonth(input) {
