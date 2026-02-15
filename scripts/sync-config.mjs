@@ -14,13 +14,14 @@ const targetConfigPath = path.join(publicDir, "config.js");
 async function run() {
   await fs.mkdir(publicDir, { recursive: true });
 
-  if (await fileExists(sourceConfigPath)) {
-    await fs.copyFile(sourceConfigPath, targetConfigPath);
+  // In hosted builds (Vercel/Netlify), prefer DASH_* env over any local config.js.
+  if (hasDashEnv()) {
+    await fs.writeFile(targetConfigPath, buildConfigFromEnv(), "utf8");
     return;
   }
 
-  if (hasDashEnv()) {
-    await fs.writeFile(targetConfigPath, buildConfigFromEnv(), "utf8");
+  if (await fileExists(sourceConfigPath)) {
+    await fs.copyFile(sourceConfigPath, targetConfigPath);
     return;
   }
 
@@ -43,15 +44,15 @@ function hasDashEnv() {
 }
 
 function buildConfigFromEnv() {
-  const appsScriptUrl = process.env.DASH_APPS_SCRIPT_URL || "";
-  const backendApiUrl = process.env.DASH_BACKEND_API_URL || "";
-  const sheetName = process.env.DASH_SHEET_NAME || "Triple Whale Hourly";
+  const appsScriptUrl = readDashString("DASH_APPS_SCRIPT_URL", "");
+  const backendApiUrl = readDashString("DASH_BACKEND_API_URL", "");
+  const sheetName = readDashString("DASH_SHEET_NAME", "Triple Whale Hourly");
   const refreshIntervalMs = toInt(process.env.DASH_REFRESH_INTERVAL_MS, 15 * 60 * 1000);
   const cycleIntervalMs = toInt(process.env.DASH_CYCLE_INTERVAL_MS, 15 * 1000);
-  const passcode = process.env.DASH_PASSCODE || "";
+  const passcode = readDashString("DASH_PASSCODE", "");
   const salesTargetMultiplier = toNumber(process.env.DASH_SALES_TARGET_MULTIPLIER, 1.15);
   const salesTargetValue = process.env.DASH_SALES_TARGET_VALUE ? toNumber(process.env.DASH_SALES_TARGET_VALUE, null) : null;
-  const currencySymbol = process.env.DASH_CURRENCY_SYMBOL || "EUR";
+  const currencySymbol = readDashString("DASH_CURRENCY_SYMBOL", "EUR");
 
   return `window.ELAVE_DASH_CONFIG = {
   appsScriptUrl: ${JSON.stringify(appsScriptUrl)},
@@ -66,6 +67,14 @@ function buildConfigFromEnv() {
   currencySymbol: ${JSON.stringify(currencySymbol)},
 };
 `;
+}
+
+function readDashString(key, fallback = "") {
+  const raw = process.env[key];
+  if (typeof raw === "undefined" || raw === null) {
+    return fallback;
+  }
+  return String(raw).trim();
 }
 
 function toInt(value, fallback) {

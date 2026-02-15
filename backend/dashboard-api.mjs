@@ -1,5 +1,6 @@
 import http from "node:http";
-import { URL } from "node:url";
+import path from "node:path";
+import { URL, fileURLToPath } from "node:url";
 import { loadEnvFile } from "./lib/env.mjs";
 import { getSupabaseConfig, supabaseSelectAll } from "./lib/supabase-rest.mjs";
 
@@ -77,7 +78,7 @@ const ENDPOINTS = [
   "/api/google/calendar/upcoming?max=4",
 ];
 
-const server = http.createServer(async (req, res) => {
+export async function handleDashboardApiRequest(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
@@ -427,11 +428,25 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     writeJson(res, 500, { error: String(error && error.message ? error.message : error) });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Dashboard API listening on http://localhost:${PORT}`);
-});
+function isDirectExecution() {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+  } catch (_error) {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  const server = http.createServer(handleDashboardApiRequest);
+  server.listen(PORT, () => {
+    console.log(`Dashboard API listening on http://localhost:${PORT}`);
+  });
+}
 
 async function buildCellsPayload() {
   const jobs = {
