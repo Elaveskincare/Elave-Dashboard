@@ -6,3 +6,4 @@ config.js
 public/config.js
 .env.local
 backend/.env.local
+.vercel
