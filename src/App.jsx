@@ -1956,6 +1956,25 @@ async function loadAdvancedCells(cfg) {
           };
         }
       }
+      if (!payload.aov || typeof payload.aov !== "object") {
+        try {
+          const aovPayload = await fetchBackendPayload(cfg, "/api/aov");
+          if (aovPayload && typeof aovPayload === "object") {
+            payload.aov = aovPayload;
+          }
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : "";
+          const routeMissing = /\(404\)/.test(message);
+          payload.aov = {
+            status: "unavailable",
+            unavailable_reason: routeMissing
+              ? "Backend route /api/aov is missing. Restart backend with latest code."
+              : error && error.message
+                ? `Unable to load /api/aov: ${error.message}`
+                : "Unable to load /api/aov from backend.",
+          };
+        }
+      }
       return payload;
     }
   } catch (_error) {
@@ -2006,6 +2025,7 @@ async function loadAdvancedCells(cfg) {
     Boolean(merged.kpis) ||
     Boolean(merged.daily_sales_pace) ||
     Boolean(merged.mtd_projection) ||
+    Boolean(merged.aov) ||
     Boolean(merged.top_products_units) ||
     Boolean(merged.top_products_revenue) ||
     Boolean(merged.product_momentum) ||
@@ -3715,7 +3735,7 @@ function buildAdvancedCellContent(cellKey, payload, cfg) {
     return buildGrossNetReturnsContent(sectionPayload, cfg);
   }
   if (cellKey === "aov") {
-    return buildAovContent(sectionPayload, cfg);
+    return buildAovContent(sectionPayload, cfg, payload);
   }
   if (cellKey === "website_sessions_mtd") {
     return buildWebsiteSessionsMtdContent(sectionPayload, payload);
@@ -3842,15 +3862,41 @@ function buildGrossNetReturnsContent(payload, cfg) {
   };
 }
 
-function buildAovContent(payload, cfg) {
+function buildAovContent(payload, cfg, rootPayload) {
+  const payloadMtdAov = parseNumber(payload && payload.mtd_aov);
+  const payloadPreviousAov = parseNumber(payload && payload.previous_period_aov);
+  const payloadChangePct = parseNumber(payload && payload.aov_change_pct);
+  const payloadMtdOrders = parseNumber(payload && payload.mtd_orders);
+
+  const summaryCurrentAov = parseNumber(rootPayload && rootPayload.kpis && rootPayload.kpis.current && rootPayload.kpis.current.aov);
+  const summaryPreviousAov = parseNumber(rootPayload && rootPayload.kpis && rootPayload.kpis.previous && rootPayload.kpis.previous.aov);
+  const summaryChangePct = parseNumber(rootPayload && rootPayload.kpis && rootPayload.kpis.change && rootPayload.kpis.change.aov_pct);
+  const summaryCurrentOrders = parseNumber(rootPayload && rootPayload.kpis && rootPayload.kpis.current && rootPayload.kpis.current.orders);
+
+  const mtdAov = Number.isFinite(payloadMtdAov) ? payloadMtdAov : summaryCurrentAov;
+  const previousAov = Number.isFinite(payloadPreviousAov) ? payloadPreviousAov : summaryPreviousAov;
+  const aovChangePct = Number.isFinite(payloadChangePct) ? payloadChangePct : summaryChangePct;
+  const mtdOrders = Number.isFinite(payloadMtdOrders) ? payloadMtdOrders : summaryCurrentOrders;
+  const unavailableReason = String(payload && payload.unavailable_reason ? payload.unavailable_reason : "").trim();
+  const body = renderKeyValueList([
+    ["MTD AOV", formatCurrencySafe(mtdAov, cfg)],
+    ["Previous AOV", formatCurrencySafe(previousAov, cfg)],
+    ["AOV Change", formatPercentSafe(aovChangePct)],
+    ["MTD Orders", formatNumberSafe(mtdOrders, 0)],
+  ]);
+
+  const hasAnyAovData =
+    Number.isFinite(mtdAov) ||
+    Number.isFinite(previousAov) ||
+    Number.isFinite(aovChangePct) ||
+    Number.isFinite(mtdOrders);
+
   return {
     subtitle: "",
-    body: renderKeyValueList([
-      ["MTD AOV", formatCurrencySafe(payload && payload.mtd_aov, cfg)],
-      ["Previous AOV", formatCurrencySafe(payload && payload.previous_period_aov, cfg)],
-      ["AOV Change", formatPercentSafe(payload && payload.aov_change_pct)],
-      ["MTD Orders", formatNumberSafe(payload && payload.mtd_orders, 0)],
-    ]),
+    body:
+      unavailableReason && !hasAnyAovData
+        ? `${body}<p class="mt-2 text-xs text-zinc-400">${escapeHtml(unavailableReason)}</p>`
+        : body,
   };
 }
 

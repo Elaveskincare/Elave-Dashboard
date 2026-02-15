@@ -1216,7 +1216,7 @@ async function getShopifySalesComparableSnapshot(now) {
   const prevComparableEnd = previousMtdComparableEnd(now, monthStart);
   const tomorrow = addUtcDays(startOfUtcDay(now), 1);
   const queryText =
-    `FROM sales SHOW total_sales, orders GROUP BY day ` +
+    `FROM sales SHOW total_sales, net_sales, orders GROUP BY day ` +
     `SINCE ${toYmd(prevMonthStart)} UNTIL ${toYmd(tomorrow)}`;
 
   const table = await fetchShopifyqlTable(queryText);
@@ -1228,14 +1228,17 @@ async function getShopifySalesComparableSnapshot(now) {
   const prevMonthPrefix = toYmd(prevMonthStart).slice(0, 7);
   const prevComparableDay = dayOfMonthInReportingZone(prevComparableEnd);
   let currentMtd = 0;
+  let currentNetMtd = 0;
   let currentOrders = 0;
   let previousComparable = 0;
+  let previousNetComparable = 0;
   let previousOrders = 0;
 
   table.rows.forEach((row) => {
     const dayRaw = readShopifyqlCell(row, table.columnIndex, "day");
     const dayKey = String(dayRaw || "").slice(0, 10);
     const sales = Number(readShopifyqlCell(row, table.columnIndex, "total_sales"));
+    const netSales = Number(readShopifyqlCell(row, table.columnIndex, "net_sales"));
     const orders = Number(readShopifyqlCell(row, table.columnIndex, "orders"));
     if (!dayKey) {
       return;
@@ -1244,6 +1247,9 @@ async function getShopifySalesComparableSnapshot(now) {
     if (dayKey.slice(0, 7) === currentMonthPrefix) {
       if (Number.isFinite(sales)) {
         currentMtd += sales;
+      }
+      if (Number.isFinite(netSales)) {
+        currentNetMtd += netSales;
       }
       if (Number.isFinite(orders)) {
         currentOrders += orders;
@@ -1257,6 +1263,9 @@ async function getShopifySalesComparableSnapshot(now) {
         if (Number.isFinite(sales)) {
           previousComparable += sales;
         }
+        if (Number.isFinite(netSales)) {
+          previousNetComparable += netSales;
+        }
         if (Number.isFinite(orders)) {
           previousOrders += orders;
         }
@@ -1267,8 +1276,10 @@ async function getShopifySalesComparableSnapshot(now) {
   return {
     source: "shopifyql",
     current_mtd: round(currentMtd, 2),
+    current_mtd_net_sales: round(currentNetMtd, 2),
     current_mtd_orders: round(currentOrders, 2),
     previous_mtd: round(previousComparable, 2),
+    previous_mtd_net_sales: round(previousNetComparable, 2),
     previous_mtd_orders: round(previousOrders, 2),
     range: {
       since: toYmd(prevMonthStart),
@@ -1314,7 +1325,7 @@ async function getShopifySameTimeComparableSnapshot(now) {
   const prevComparableEnd = new Date(prevMonthStart.getTime() + elapsedMs);
   const tomorrow = addUtcDays(startOfUtcDay(now), 1);
   const queryText =
-    `FROM sales SHOW total_sales GROUP BY hour ` +
+    `FROM sales SHOW total_sales, net_sales GROUP BY hour ` +
     `SINCE ${toYmd(prevMonthStart)} UNTIL ${toYmd(tomorrow)}`;
 
   const [table, currentOrderCount, previousOrderCount] = await Promise.all([
@@ -1327,28 +1338,39 @@ async function getShopifySameTimeComparableSnapshot(now) {
   }
 
   let currentMtdSales = 0;
+  let currentMtdNetSales = 0;
   let previousComparableSales = 0;
+  let previousComparableNetSales = 0;
 
   table.rows.forEach((row) => {
     const hourRaw = readShopifyqlCell(row, table.columnIndex, "hour");
     const ts = Date.parse(String(hourRaw || ""));
     const sales = Number(readShopifyqlCell(row, table.columnIndex, "total_sales"));
-    if (!Number.isFinite(ts) || !Number.isFinite(sales)) {
+    const netSales = Number(readShopifyqlCell(row, table.columnIndex, "net_sales"));
+    if (!Number.isFinite(ts)) {
       return;
     }
 
-    if (ts >= monthStart.getTime() && ts <= now.getTime()) {
+    if (ts >= monthStart.getTime() && ts <= now.getTime() && Number.isFinite(sales)) {
       currentMtdSales += sales;
     }
-    if (ts >= prevMonthStart.getTime() && ts <= prevComparableEnd.getTime()) {
+    if (ts >= prevMonthStart.getTime() && ts <= prevComparableEnd.getTime() && Number.isFinite(sales)) {
       previousComparableSales += sales;
+    }
+    if (ts >= monthStart.getTime() && ts <= now.getTime() && Number.isFinite(netSales)) {
+      currentMtdNetSales += netSales;
+    }
+    if (ts >= prevMonthStart.getTime() && ts <= prevComparableEnd.getTime() && Number.isFinite(netSales)) {
+      previousComparableNetSales += netSales;
     }
   });
 
   return {
     source: "shopify_same_time",
     current_mtd_sales: round(currentMtdSales, 2),
+    current_mtd_net_sales: round(currentMtdNetSales, 2),
     previous_mtd_sales: round(previousComparableSales, 2),
+    previous_mtd_net_sales: round(previousComparableNetSales, 2),
     current_mtd_orders: Number.isFinite(currentOrderCount) ? currentOrderCount : null,
     previous_mtd_orders: Number.isFinite(previousOrderCount) ? previousOrderCount : null,
     range: {
@@ -1555,8 +1577,16 @@ async function buildSummaryPayload() {
     : prevOrderTotals.orders_count;
   const currentAdSpend = currentHourlyTotals.ad_spend;
   const previousAdSpend = prevHourlyTotals.ad_spend;
-  const currentAov = currentOrders > 0 ? currentSales / currentOrders : null;
-  const previousAov = previousOrders > 0 ? previousSales / previousOrders : null;
+  const currentNetSalesForAov = Number.isFinite(salesComparableSnapshot?.current_mtd_net_sales)
+    ? salesComparableSnapshot.current_mtd_net_sales
+    : Number.isFinite(salesMonthSnapshot?.current?.net_sales)
+    ? salesMonthSnapshot.current.net_sales
+    : currentOrderTotals.net_sales;
+  const previousNetSalesForAov = Number.isFinite(salesComparableSnapshot?.previous_mtd_net_sales)
+    ? salesComparableSnapshot.previous_mtd_net_sales
+    : prevOrderTotals.net_sales;
+  const currentAov = currentOrders > 0 ? currentNetSalesForAov / currentOrders : null;
+  const previousAov = previousOrders > 0 ? previousNetSalesForAov / previousOrders : null;
   const currentRoas = currentAdSpend > 0 ? currentSales / currentAdSpend : null;
   const previousRoas = previousAdSpend > 0 ? previousSales / previousAdSpend : null;
   const currentSalesForChange = Number.isFinite(sameTimeSnapshot?.current_mtd_sales) ? sameTimeSnapshot.current_mtd_sales : currentSales;
@@ -1569,8 +1599,14 @@ async function buildSummaryPayload() {
   const previousOrdersForChange = Number.isFinite(sameTimeSnapshot?.previous_mtd_orders)
     ? sameTimeSnapshot.previous_mtd_orders
     : previousOrders;
-  const currentAovForChange = currentOrdersForChange > 0 ? currentSalesForChange / currentOrdersForChange : null;
-  const previousAovForChange = previousOrdersForChange > 0 ? previousSalesForChange / previousOrdersForChange : null;
+  const currentNetSalesForChange = Number.isFinite(sameTimeSnapshot?.current_mtd_net_sales)
+    ? sameTimeSnapshot.current_mtd_net_sales
+    : currentNetSalesForAov;
+  const previousNetSalesForChange = Number.isFinite(sameTimeSnapshot?.previous_mtd_net_sales)
+    ? sameTimeSnapshot.previous_mtd_net_sales
+    : previousNetSalesForAov;
+  const currentAovForChange = currentOrdersForChange > 0 ? currentNetSalesForChange / currentOrdersForChange : null;
+  const previousAovForChange = previousOrdersForChange > 0 ? previousNetSalesForChange / previousOrdersForChange : null;
   const salesPctChange = pctChange(currentSalesForChange, previousSalesForChange);
   const ordersPctChange = pctChange(currentOrdersForChange, previousOrdersForChange);
 
@@ -1612,7 +1648,7 @@ async function buildSummaryPayload() {
       orders_pct: Number.isFinite(ordersPctChange) ? round(ordersPctChange, 0) : ordersPctChange,
       ad_spend_pct: pctChange(current.ad_spend, previous.ad_spend),
       roas_pct: pctChange(current.roas, previous.roas),
-      aov_pct: pctChange(currentAovForChange, previousAovForChange),
+      aov_pct: pctChange(currentAov, previousAov),
     },
   };
 
@@ -1986,37 +2022,69 @@ async function getAovPayload() {
   const prevMonthStart = addUtcMonths(monthStart, -1);
   const prevComparableEnd = previousMtdComparableEnd(now, monthStart);
 
+  let ordersFetchError = "";
+  let shopifyComparableError = "";
   const [orders, salesComparableSnapshot] = await Promise.all([
-    fetchOrderRowsSinceIso(prevMonthStart.toISOString()),
+    fetchOrderRowsSinceIso(prevMonthStart.toISOString()).catch((error) => {
+      ordersFetchError = errorMessage(error, "Orders table fetch failed");
+      console.warn("Orders fallback unavailable in aov:", ordersFetchError);
+      return [];
+    }),
     getShopifySalesComparableSnapshot(now).catch((error) => {
-      console.warn("ShopifyQL comparable snapshot unavailable in aov:", error.message);
+      shopifyComparableError = errorMessage(error, "ShopifyQL comparable snapshot unavailable");
+      console.warn("ShopifyQL comparable snapshot unavailable in aov:", shopifyComparableError);
       return null;
     }),
   ]);
-  const currentOrders = filterBetween(orders, "created_at_utc", monthStart, now);
-  const prevOrders = filterBetween(orders, "created_at_utc", prevMonthStart, prevComparableEnd);
+
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const currentOrders = filterBetween(safeOrders, "created_at_utc", monthStart, now);
+  const prevOrders = filterBetween(safeOrders, "created_at_utc", prevMonthStart, prevComparableEnd);
   const current = aggregateOrders(currentOrders);
   const previous = aggregateOrders(prevOrders);
 
-  const currentSales = Number.isFinite(salesComparableSnapshot?.current_mtd) ? salesComparableSnapshot.current_mtd : current.total_sales;
-  const previousSales = Number.isFinite(salesComparableSnapshot?.previous_mtd) ? salesComparableSnapshot.previous_mtd : previous.total_sales;
-  const currentOrderCount = Number.isFinite(salesComparableSnapshot?.current_mtd_orders)
-    ? salesComparableSnapshot.current_mtd_orders
-    : current.orders_count;
-  const previousOrderCount = Number.isFinite(salesComparableSnapshot?.previous_mtd_orders)
-    ? salesComparableSnapshot.previous_mtd_orders
-    : previous.orders_count;
+  const hasShopifySales =
+    Number.isFinite(salesComparableSnapshot?.current_mtd_net_sales) &&
+    Number.isFinite(salesComparableSnapshot?.previous_mtd_net_sales);
+  const hasShopifyOrders =
+    Number.isFinite(salesComparableSnapshot?.current_mtd_orders) &&
+    Number.isFinite(salesComparableSnapshot?.previous_mtd_orders);
 
-  const currentAov = currentOrderCount > 0 ? currentSales / currentOrderCount : null;
-  const previousAov = previousOrderCount > 0 ? previousSales / previousOrderCount : null;
+  const currentNetSales = hasShopifySales ? salesComparableSnapshot.current_mtd_net_sales : current.net_sales;
+  const previousNetSales = hasShopifySales ? salesComparableSnapshot.previous_mtd_net_sales : previous.net_sales;
+  const currentOrderCount = hasShopifyOrders ? salesComparableSnapshot.current_mtd_orders : current.orders_count;
+  const previousOrderCount = hasShopifyOrders ? salesComparableSnapshot.previous_mtd_orders : previous.orders_count;
+
+  const currentAov = currentOrderCount > 0 ? currentNetSales / currentOrderCount : null;
+  const previousAov = previousOrderCount > 0 ? previousNetSales / previousOrderCount : null;
+  const hasAov = Number.isFinite(currentAov) && Number.isFinite(previousAov);
+  const unavailableReason = hasAov
+    ? ""
+    : shopifyComparableError
+      ? shopifyComparableError
+      : ordersFetchError
+        ? ordersFetchError
+        : "AOV data unavailable";
 
   return {
     updatedAt: now.toISOString(),
+    status: hasAov ? "ok" : "unavailable",
+    source_sales: hasShopifySales ? "shopifyql" : "orders_table",
+    source_orders: hasShopifyOrders ? "shopifyql" : "orders_table",
+    unavailable_reason: unavailableReason,
+    period: {
+      current_start_utc: monthStart.toISOString(),
+      current_end_utc: now.toISOString(),
+      previous_start_utc: prevMonthStart.toISOString(),
+      previous_end_utc: prevComparableEnd.toISOString(),
+    },
     mtd_aov: round(currentAov, 2),
     previous_period_aov: round(previousAov, 2),
     aov_change_pct: pctChange(currentAov, previousAov),
     mtd_orders: round(currentOrderCount, 2),
-    mtd_sales: round(currentSales, 2),
+    mtd_net_sales: round(currentNetSales, 2),
+    previous_mtd_net_sales: round(previousNetSales, 2),
+    mtd_sales: round(currentNetSales, 2),
   };
 }
 
