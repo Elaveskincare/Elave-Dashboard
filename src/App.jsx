@@ -164,6 +164,7 @@ const advancedCellSeed = [
   { key: "new_vs_returning", label: "New vs Returning Revenue", colSpan: 3, rowSpan: 2 },
   { key: "channel_split", label: "Channel Split", colSpan: 3, rowSpan: 2 },
   { key: "discount_impact", label: "Discount Impact", colSpan: 3, rowSpan: 2 },
+  { key: "mtd_growth_rate", label: "Growth Rate (MTD vs Previous MTD)", colSpan: 3, rowSpan: 1 },
   { key: "ytd_orders", label: "Orders (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
   { key: "ytd_total_sales", label: "Total Sales (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
   { key: "ytd_growth_rate", label: "Growth Rate (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
@@ -3770,6 +3771,9 @@ function buildAdvancedCellContent(cellKey, payload, cfg) {
   if (cellKey === "website_sessions_mtd") {
     return buildWebsiteSessionsMtdContent(sectionPayload, payload);
   }
+  if (cellKey === "mtd_growth_rate") {
+    return buildMtdGrowthRateContent(payload, cfg);
+  }
   if (cellKey === "ytd_orders") {
     return buildYtdOrdersContent(payload, cfg);
   }
@@ -4019,6 +4023,19 @@ function getYtdComparisonSnapshot(rootPayload) {
   };
 }
 
+function getMtdComparisonSnapshot(rootPayload) {
+  const kpis = rootPayload && typeof rootPayload.kpis === "object" ? rootPayload.kpis : null;
+  const currentSales = parseNumber(kpis?.current?.sales_amount);
+  const previousSales = parseNumber(kpis?.previous?.sales_amount);
+  const growthPctRaw = parseNumber(kpis?.change?.sales_amount_pct);
+
+  return {
+    currentSales,
+    previousSales,
+    growthPct: Number.isFinite(growthPctRaw) ? growthPctRaw : calcPercentChange(currentSales, previousSales),
+  };
+}
+
 function buildYtdMetricLikeContent({
   title,
   value,
@@ -4071,6 +4088,24 @@ function buildYtdOrdersContent(rootPayload, _cfg) {
     changePct: snapshot.ordersPct,
     previousText: Number.isFinite(snapshot.previousOrders) ? `LY YTD: ${formatNumber(snapshot.previousOrders, 0)}` : "LY YTD: --",
     unavailableSummary: "YTD orders unavailable",
+  });
+}
+
+function buildMtdGrowthRateContent(rootPayload, cfg) {
+  const snapshot = getMtdComparisonSnapshot(rootPayload);
+  return buildYtdMetricLikeContent({
+    title: "Growth Rate MTD",
+    value: snapshot.growthPct,
+    valueFormat: "percent",
+    valueDigits: 0,
+    signed: true,
+    changePct: snapshot.growthPct,
+    previousText:
+      Number.isFinite(snapshot.currentSales) || Number.isFinite(snapshot.previousSales)
+        ? `Current / Previous MTD: ${formatCurrencySafe(snapshot.currentSales, cfg)} / ${formatCurrencySafe(snapshot.previousSales, cfg)}`
+        : "Current / Previous MTD: --",
+    unavailableSummary: "MTD growth unavailable",
+    trendSummary: "Revenue growth vs previous MTD",
   });
 }
 
