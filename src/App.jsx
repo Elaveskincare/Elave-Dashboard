@@ -63,6 +63,15 @@ const fixedWidgetSeed = {
     rowSpan: 2,
     accentClass: "widget-goal",
   },
+  goal_ytd_panel: {
+    key: "goal_ytd_panel",
+    label: "Target Progress (YTD vs LY YTD)",
+    type: "fixed",
+    view: "goal_ytd",
+    colSpan: 6,
+    rowSpan: 2,
+    accentClass: "widget-goal",
+  },
   chart_panel: {
     key: "chart_panel",
     label: "Trend Chart",
@@ -592,6 +601,15 @@ function App() {
         monthlyTargets,
       }),
     [cfg, latestRow, previousRow, salesMeta, cellsPayload, monthlyTargets]
+  );
+
+  const ytdGoalData = useMemo(
+    () =>
+      buildYtdGoalData({
+        cfg,
+        cellsPayload,
+      }),
+    [cfg, cellsPayload]
   );
 
   const selectedTrend = useMemo(() => {
@@ -1312,6 +1330,90 @@ function App() {
                           <p>{goalData.milestoneTarget}</p>
                           <p className={goalData.gapPrevClass}>{goalData.gapPrev}</p>
                           <p className={goalData.gapTargetClass}>{goalData.gapTarget}</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                }
+
+                if (widget.type === "fixed" && widget.view === "goal_ytd") {
+                  return (
+                    <Card
+                      key={widget.key}
+                      className={cn(
+                        "layout-widget flex h-full flex-col rounded-2xl border-white/10 bg-[#121212]/95 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]",
+                        showReveal && "card-reveal-in",
+                        draggingWidgetId === widget.key && "card-dragging"
+                      )}
+                      draggable
+                      onDragStart={(event) => onWidgetDragStart(event, widget.key)}
+                      style={styleObject}
+                    >
+                      <CardHeader className="pb-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <CardTitle className="text-lg">Target Progress (YTD)</CardTitle>
+                            <CardDescription>YTD total sales vs last year YTD</CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" variant="ghost" onClick={() => handleRemoveWidget(widget.key)}>
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex flex-1 flex-col gap-5">
+                        <div className="grid grid-cols-1 gap-3.5 text-sm md:grid-cols-3 md:text-base">
+                          <StatPill
+                            label="Current YTD"
+                            value={ytdGoalData.currentText}
+                            numericValue={ytdGoalData.currentValue}
+                            formatValue={(num) => formatCurrency(num, cfg.currencySymbol)}
+                            tone="neutral"
+                            note={ytdGoalData.currentNote}
+                          />
+                          <StatPill
+                            label="LY YTD Target"
+                            value={ytdGoalData.targetText}
+                            numericValue={ytdGoalData.targetValue}
+                            formatValue={(num) => formatCurrency(num, cfg.currencySymbol)}
+                            tone="warning"
+                            note={ytdGoalData.targetNote}
+                          />
+                          <StatPill
+                            label="Growth Rate"
+                            value={ytdGoalData.growthText}
+                            numericValue={ytdGoalData.growthValue}
+                            formatValue={(num) => formatSignedPercent(num, 1)}
+                            tone="neutral"
+                            note={ytdGoalData.growthNote}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-base md:text-lg">
+                            <span className={cn("font-semibold", ytdGoalData.statusClass)}>{ytdGoalData.statusText}</span>
+                            <AnimatedNumber
+                              as="span"
+                              className="font-mono text-base md:text-lg"
+                              value={ytdGoalData.progressValue}
+                              formatValue={(num) => `${formatNumber(num, 1)}%`}
+                              fallback={ytdGoalData.progressText}
+                            />
+                          </div>
+                          <div className="h-[1.2rem] overflow-hidden rounded-full bg-zinc-800/80">
+                            <div
+                              className={cn("goal-fill h-full rounded-full", ytdGoalData.fillClass)}
+                              style={{ width: `${ytdGoalData.progressClamped}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-auto grid grid-cols-1 gap-x-7 gap-y-2 text-[clamp(0.96rem,0.95vw,1.2rem)] leading-[1.32] text-zinc-300 md:grid-cols-2">
+                          <p>{ytdGoalData.milestonePrev}</p>
+                          <p>{ytdGoalData.milestoneTarget}</p>
+                          <p className={ytdGoalData.gapPrevClass}>{ytdGoalData.gapPrev}</p>
+                          <p className={ytdGoalData.gapTargetClass}>{ytdGoalData.gapTarget}</p>
                         </div>
                       </CardContent>
                     </Card>
@@ -3218,6 +3320,124 @@ function buildGoalData({ cfg, row, previousRow, salesMeta, cellsPayload, monthly
   };
 }
 
+function buildYtdGoalData({ cfg, cellsPayload }) {
+  const empty = {
+    currentText: "--",
+    currentValue: NaN,
+    currentNote: "as of --",
+    targetText: "--",
+    targetValue: NaN,
+    targetNote: "baseline: LY YTD",
+    growthText: "--",
+    growthValue: NaN,
+    growthNote: "vs LY YTD: --",
+    statusText: "YTD baseline unavailable",
+    statusClass: "text-zinc-400",
+    progressText: "--",
+    progressValue: NaN,
+    progressClamped: 0,
+    fillClass: "",
+    milestonePrev: "YTD window: --",
+    milestoneTarget: "LY cutoff: --",
+    gapPrev: "Growth vs LY YTD: --",
+    gapTarget: "Gap vs LY YTD: --",
+    gapPrevClass: "text-zinc-300",
+    gapTargetClass: "text-zinc-300",
+  };
+
+  const ytdPayload = cellsPayload && typeof cellsPayload === "object" ? cellsPayload.ytd_comparison : null;
+  if (!ytdPayload || typeof ytdPayload !== "object") {
+    return empty;
+  }
+
+  const current = parseNumber(ytdPayload?.current?.sales_amount);
+  const target = parseNumber(ytdPayload?.previous?.sales_amount);
+  const growthFromPayload = parseNumber(ytdPayload?.change?.sales_amount_pct);
+  const growth = Number.isFinite(growthFromPayload) ? growthFromPayload : calcPercentChange(current, target);
+  const deltaVsLy = Number.isFinite(current) && Number.isFinite(target) ? current - target : NaN;
+  const currentEnd = formatIsoDateLabel(ytdPayload?.period?.current_end_utc);
+  const currentStart = formatIsoDateLabel(ytdPayload?.period?.current_start_utc);
+  const previousEnd = formatIsoDateLabel(ytdPayload?.period?.previous_end_utc);
+  const reportingTimezone = String(ytdPayload?.period?.reporting_timezone || "").trim();
+  const salesSource = String(ytdPayload?.source?.sales || "").trim();
+
+  const currentText = Number.isFinite(current) ? formatCurrency(current, cfg.currencySymbol) : "--";
+  const targetText = Number.isFinite(target) ? formatCurrency(target, cfg.currencySymbol) : "--";
+  const growthText = Number.isFinite(growth) ? formatSignedPercent(growth, 1) : "--";
+  const growthNote = Number.isFinite(growth) ? `vs LY YTD: ${formatSignedPercent(growth, 1)}` : "vs LY YTD: --";
+  const targetNote = salesSource ? `source: ${salesSource}` : "baseline: LY YTD";
+
+  if (!Number.isFinite(current) || !Number.isFinite(target) || target <= 0) {
+    return {
+      ...empty,
+      currentText,
+      currentValue: current,
+      currentNote: currentEnd ? `as of ${currentEnd}` : empty.currentNote,
+      targetText,
+      targetValue: target,
+      targetNote,
+      growthText,
+      growthValue: growth,
+      growthNote,
+      milestonePrev: currentStart && currentEnd ? `YTD window: ${currentStart} -> ${currentEnd}` : empty.milestonePrev,
+      milestoneTarget: previousEnd
+        ? `LY cutoff: ${previousEnd}${reportingTimezone ? ` (${reportingTimezone})` : ""}`
+        : empty.milestoneTarget,
+    };
+  }
+
+  const progressPct = (current / target) * 100;
+  const progressClamped = clampPercent(progressPct);
+  const beatLy = current > target;
+  const belowLy = current < target;
+
+  let statusText = "Matching LY YTD";
+  let statusClass = "text-zinc-200";
+  let fillClass = "on-track";
+  let gapPrevClass = "text-zinc-300";
+  let gapTargetClass = "text-zinc-300";
+
+  if (beatLy) {
+    statusText = "Ahead vs LY YTD";
+    statusClass = "text-zinc-100";
+    fillClass = "complete";
+    gapPrevClass = "text-zinc-100";
+    gapTargetClass = "text-zinc-100";
+  } else if (belowLy) {
+    statusText = "Behind LY YTD";
+    statusClass = "text-zinc-200";
+    fillClass = "below-prev";
+  }
+
+  return {
+    currentText,
+    currentValue: current,
+    currentNote: currentEnd ? `as of ${currentEnd}` : empty.currentNote,
+    targetText,
+    targetValue: target,
+    targetNote,
+    growthText,
+    growthValue: growth,
+    growthNote,
+    statusText,
+    statusClass,
+    progressText: `${formatNumber(progressPct, 1)}%`,
+    progressValue: progressPct,
+    progressClamped,
+    fillClass,
+    milestonePrev: currentStart && currentEnd ? `YTD window: ${currentStart} -> ${currentEnd}` : empty.milestonePrev,
+    milestoneTarget: previousEnd
+      ? `LY cutoff: ${previousEnd}${reportingTimezone ? ` (${reportingTimezone})` : ""}`
+      : empty.milestoneTarget,
+    gapPrev: Number.isFinite(growth) ? `Growth vs LY YTD: ${formatSignedPercent(growth, 1)}` : empty.gapPrev,
+    gapTarget: Number.isFinite(deltaVsLy)
+      ? `Gap vs LY YTD: ${deltaVsLy >= 0 ? "+" : "-"}${formatCurrency(Math.abs(deltaVsLy), cfg.currencySymbol)}`
+      : empty.gapTarget,
+    gapPrevClass,
+    gapTargetClass,
+  };
+}
+
 function parseNumber(value) {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : NaN;
@@ -3713,6 +3933,26 @@ function formatPercentSafe(value) {
   }
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatNumber(value, 0)}%`;
+}
+
+function formatSignedPercent(value, digits = 0) {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, digits)}%`;
+}
+
+function formatIsoDateLabel(iso) {
+  const ts = Date.parse(String(iso || ""));
+  if (!Number.isFinite(ts)) {
+    return "";
+  }
+  return new Date(ts).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function formatMetricLikeValue(value, content, cfg) {
