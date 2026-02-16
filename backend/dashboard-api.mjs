@@ -57,6 +57,7 @@ const ENDPOINTS = [
   "/api/latest",
   "/api/summary",
   "/api/kpis",
+  "/api/ytd",
   "/api/cells",
   "/api/trend/hourly?days=30",
   "/api/trend/daily?days=90",
@@ -268,6 +269,12 @@ export async function handleDashboardApiRequest(req, res) {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/ytd") {
+      const payload = await getYtdComparisonPayload();
+      writeJson(res, 200, payload);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/cells") {
       const payload = await buildCellsPayload();
       writeJson(res, 200, payload);
@@ -471,6 +478,7 @@ if (isDirectExecution()) {
 async function buildCellsPayload() {
   const jobs = {
     summary: () => buildSummaryPayload(),
+    ytdComparison: () => getYtdComparisonPayload(),
     topUnits: () => getTopProductsByUnits(10),
     topRevenue: () => getTopProductsByRevenue(10),
     momentum: () => getProductMomentum({ limit: 10, metric: "revenue" }),
@@ -508,6 +516,7 @@ async function buildCellsPayload() {
     updatedAt: new Date().toISOString(),
     summary: summary && summary.summary ? summary.summary : null,
     kpis: summary && summary.kpis ? summary.kpis : null,
+    ytd_comparison: resultMap.ytdComparison,
     top_products_units: resultMap.topUnits,
     top_products_revenue: resultMap.topRevenue,
     product_momentum: resultMap.momentum,
@@ -946,6 +955,24 @@ function startOfUtcMonth(date) {
   });
 }
 
+function startOfUtcYear(date) {
+  const parts = getZonedParts(date);
+  return zonedDateTimeToUtc({
+    year: parts.year,
+    month: 1,
+    day: 1,
+  });
+}
+
+function addUtcYears(date, delta) {
+  const parts = getZonedParts(date);
+  return zonedDateTimeToUtc({
+    year: parts.year + delta,
+    month: 1,
+    day: 1,
+  });
+}
+
 function addUtcMonths(date, delta) {
   const parts = getZonedParts(date);
   return zonedDateTimeToUtc({
@@ -994,6 +1021,29 @@ function previousMtdComparableEnd(now, currentMonthStart = startOfUtcMonth(now))
   });
   const nextDayStart = addUtcDays(comparableDayStart, 1);
   return new Date(nextDayStart.getTime() - 1);
+}
+
+function previousYtdComparableEnd(now) {
+  const currentParts = getZonedParts(now);
+  const previousYear = currentParts.year - 1;
+  const previousMonthDays = daysInYearMonth(previousYear, currentParts.month);
+  const comparableDay = Math.min(currentParts.day, previousMonthDays);
+
+  return zonedDateTimeToUtc(
+    {
+      year: previousYear,
+      month: currentParts.month,
+      day: comparableDay,
+      hour: currentParts.hour,
+      minute: currentParts.minute,
+      second: currentParts.second,
+    },
+    REPORTING_TIMEZONE
+  );
+}
+
+function daysInYearMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 function toYmd(date) {
@@ -1285,6 +1335,76 @@ async function getShopifySalesComparableSnapshot(now) {
       since: toYmd(prevMonthStart),
       until: toYmd(tomorrow),
       previous_end_utc: prevComparableEnd.toISOString(),
+    },
+  };
+}
+
+async function getShopifySalesYtdComparableSnapshot(now) {
+  if (!SHOPIFY_DOMAIN || !SHOPIFY_ACCESS_TOKEN) {
+    return null;
+  }
+
+  const currentYearStart = startOfUtcYear(now);
+  const previousYearStart = addUtcYears(currentYearStart, -1);
+  const previousComparableEnd = previousYtdComparableEnd(now);
+  const tomorrow = addUtcDays(startOfUtcDay(now), 1);
+  const queryText =
+    `FROM sales SHOW total_sales, orders GROUP BY day ` +
+    `SINCE ${toYmd(previousYearStart)} UNTIL ${toYmd(tomorrow)}`;
+
+  const table = await fetchShopifyqlTable(queryText);
+  if (!table) {
+    return null;
+  }
+
+  const currentYearPrefix = toYmd(currentYearStart).slice(0, 4);
+  const previousYearPrefix = toYmd(previousYearStart).slice(0, 4);
+  const currentComparableYmd = toYmd(now);
+  const previousComparableYmd = toYmd(previousComparableEnd);
+  let currentYtdSales = 0;
+  let previousYtdSales = 0;
+  let currentYtdOrders = 0;
+  let previousYtdOrders = 0;
+
+  table.rows.forEach((row) => {
+    const dayRaw = readShopifyqlCell(row, table.columnIndex, "day");
+    const dayKey = String(dayRaw || "").slice(0, 10);
+    const sales = Number(readShopifyqlCell(row, table.columnIndex, "total_sales"));
+    const orders = Number(readShopifyqlCell(row, table.columnIndex, "orders"));
+    if (!dayKey) {
+      return;
+    }
+
+    if (dayKey.slice(0, 4) === currentYearPrefix && dayKey <= currentComparableYmd) {
+      if (Number.isFinite(sales)) {
+        currentYtdSales += sales;
+      }
+      if (Number.isFinite(orders)) {
+        currentYtdOrders += orders;
+      }
+      return;
+    }
+
+    if (dayKey.slice(0, 4) === previousYearPrefix && dayKey <= previousComparableYmd) {
+      if (Number.isFinite(sales)) {
+        previousYtdSales += sales;
+      }
+      if (Number.isFinite(orders)) {
+        previousYtdOrders += orders;
+      }
+    }
+  });
+
+  return {
+    source: "shopifyql",
+    current_ytd_sales: round(currentYtdSales, 2),
+    previous_ytd_sales: round(previousYtdSales, 2),
+    current_ytd_orders: round(currentYtdOrders, 2),
+    previous_ytd_orders: round(previousYtdOrders, 2),
+    range: {
+      since: toYmd(previousYearStart),
+      until: toYmd(tomorrow),
+      previous_end_utc: previousComparableEnd.toISOString(),
     },
   };
 }
@@ -1663,6 +1783,84 @@ async function buildSummaryPayload() {
     },
     summary,
     kpis,
+  };
+}
+
+async function getYtdComparisonPayload() {
+  const now = nowUtc();
+  const currentYearStart = startOfUtcYear(now);
+  const previousYearStart = addUtcYears(currentYearStart, -1);
+  const previousComparableEnd = previousYtdComparableEnd(now);
+
+  let shopifyYtdSnapshot = null;
+  try {
+    shopifyYtdSnapshot = await getShopifySalesYtdComparableSnapshot(now);
+  } catch (error) {
+    console.warn("ShopifyQL YTD snapshot unavailable:", error.message);
+  }
+
+  const orderRows = await fetchOrderRowsSinceIso(previousYearStart.toISOString());
+  const currentRows = filterReportableOrderRows(filterBetween(orderRows, "created_at_utc", currentYearStart, now));
+  const previousRows = filterReportableOrderRows(
+    filterBetween(orderRows, "created_at_utc", previousYearStart, previousComparableEnd)
+  );
+
+  const currentTotals = aggregateOrders(currentRows);
+  const previousTotals = aggregateOrders(previousRows);
+
+  const currentSales = Number.isFinite(shopifyYtdSnapshot?.current_ytd_sales)
+    ? shopifyYtdSnapshot.current_ytd_sales
+    : currentRows.length
+      ? currentTotals.total_sales
+      : null;
+  const previousSales = Number.isFinite(shopifyYtdSnapshot?.previous_ytd_sales)
+    ? shopifyYtdSnapshot.previous_ytd_sales
+    : previousRows.length
+      ? previousTotals.total_sales
+      : null;
+  const currentOrders = Number.isFinite(shopifyYtdSnapshot?.current_ytd_orders)
+    ? shopifyYtdSnapshot.current_ytd_orders
+    : currentRows.length
+      ? currentTotals.orders_count
+      : null;
+  const previousOrders = Number.isFinite(shopifyYtdSnapshot?.previous_ytd_orders)
+    ? shopifyYtdSnapshot.previous_ytd_orders
+    : previousRows.length
+      ? previousTotals.orders_count
+      : null;
+  const salesPct = pctChange(currentSales, previousSales);
+  const ordersPct = pctChange(currentOrders, previousOrders);
+
+  return {
+    updatedAt: now.toISOString(),
+    period: {
+      current_start_utc: currentYearStart.toISOString(),
+      current_end_utc: now.toISOString(),
+      previous_start_utc: previousYearStart.toISOString(),
+      previous_end_utc: previousComparableEnd.toISOString(),
+      reporting_timezone: REPORTING_TIMEZONE,
+      comparison_basis: "same_local_datetime_previous_year",
+    },
+    current: {
+      sales_amount: round(currentSales, 2),
+      orders: round(currentOrders, 0),
+      row_count: currentRows.length,
+    },
+    previous: {
+      sales_amount: round(previousSales, 2),
+      orders: round(previousOrders, 0),
+      row_count: previousRows.length,
+    },
+    change: {
+      sales_amount_pct: salesPct,
+      orders_pct: ordersPct,
+      growth_rate_pct: salesPct,
+    },
+    source: {
+      sales: Number.isFinite(shopifyYtdSnapshot?.current_ytd_sales) ? "shopifyql" : currentRows.length ? "orders_table" : "unavailable",
+      orders:
+        Number.isFinite(shopifyYtdSnapshot?.current_ytd_orders) ? "shopifyql" : currentRows.length ? "orders_table" : "unavailable",
+    },
   };
 }
 

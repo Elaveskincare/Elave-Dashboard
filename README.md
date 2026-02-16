@@ -101,6 +101,7 @@ This serves:
 - `GET /api/latest`: most recent row
 - `GET /api/summary`: MTD summary + previous period comparison
 - `GET /api/kpis`: alias of summary (for KPI cards)
+- `GET /api/ytd`: current YTD vs last-year YTD (orders, sales, growth rate)
 - `GET /api/cells`: combined payload for all dashboard cells
 - `GET /api/trend/hourly?days=30`: hourly trend series
 - `GET /api/trend/daily?days=90`: daily aggregated trend

@@ -164,6 +164,9 @@ const advancedCellSeed = [
   { key: "new_vs_returning", label: "New vs Returning Revenue", colSpan: 3, rowSpan: 2 },
   { key: "channel_split", label: "Channel Split", colSpan: 3, rowSpan: 2 },
   { key: "discount_impact", label: "Discount Impact", colSpan: 3, rowSpan: 2 },
+  { key: "ytd_orders", label: "Orders (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
+  { key: "ytd_total_sales", label: "Total Sales (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
+  { key: "ytd_growth_rate", label: "Growth Rate (YTD vs LY YTD)", colSpan: 3, rowSpan: 1 },
   { key: "hourly_heatmap_today", label: "Hourly Heatmap (Today)", colSpan: 3, rowSpan: 2 },
   { key: "refund_watchlist", label: "Refund Watchlist", colSpan: 3, rowSpan: 2 },
 ];
@@ -1626,7 +1629,7 @@ function App() {
                             as="p"
                             className="text-[3rem] font-semibold leading-none tracking-tight text-zinc-50"
                             value={content.value}
-                            formatValue={(num) => formatNumber(num, Number.isFinite(content.valueDigits) ? content.valueDigits : 0)}
+                            formatValue={(num) => formatMetricLikeValue(num, content, cfg)}
                             fallback={content.valueText || "--"}
                           />
                           <p className={cn("text-xl font-medium", content.trendSummaryClass && `trend-${content.trendSummaryClass}`)}>
@@ -1931,6 +1934,7 @@ async function loadAdvancedCells(cfg) {
           if (summaryPayload && typeof summaryPayload === "object") {
             payload.summary = payload.summary || summaryPayload.summary || null;
             payload.kpis = payload.kpis || summaryPayload.kpis || null;
+            payload.ytd_comparison = payload.ytd_comparison || summaryPayload.ytd || null;
           }
         } catch (_error) {
           // Keep payload as-is.
@@ -1975,6 +1979,16 @@ async function loadAdvancedCells(cfg) {
           };
         }
       }
+      if (!payload.ytd_comparison || typeof payload.ytd_comparison !== "object") {
+        try {
+          const ytdPayload = await fetchBackendPayload(cfg, "/api/ytd");
+          if (ytdPayload && typeof ytdPayload === "object") {
+            payload.ytd_comparison = ytdPayload;
+          }
+        } catch (_error) {
+          payload.ytd_comparison = payload.ytd_comparison || null;
+        }
+      }
       return payload;
     }
   } catch (_error) {
@@ -1990,6 +2004,7 @@ async function loadAdvancedCells(cfg) {
     ["mtd_projection", "/api/projection"],
     ["gross_net_returns", "/api/finance/gross-net-returns"],
     ["aov", "/api/aov"],
+    ["ytd_comparison", "/api/ytd"],
     ["website_sessions_mtd", "/api/sessions/mtd"],
     ["new_vs_returning", "/api/customers/new-vs-returning"],
     ["channel_split", "/api/channels"],
@@ -2015,6 +2030,7 @@ async function loadAdvancedCells(cfg) {
     if (key === "summary_bundle") {
       merged.summary = result.value.summary || null;
       merged.kpis = result.value.kpis || null;
+      merged.ytd_comparison = result.value.ytd || null;
       return;
     }
 
@@ -2029,7 +2045,8 @@ async function loadAdvancedCells(cfg) {
     Boolean(merged.top_products_units) ||
     Boolean(merged.top_products_revenue) ||
     Boolean(merged.product_momentum) ||
-    Boolean(merged.website_sessions_mtd);
+    Boolean(merged.website_sessions_mtd) ||
+    Boolean(merged.ytd_comparison);
 
   return hasUsefulData ? merged : null;
 }
@@ -3697,6 +3714,19 @@ function formatPercentSafe(value) {
   return `${sign}${formatNumber(value, 0)}%`;
 }
 
+function formatMetricLikeValue(value, content, cfg) {
+  const digits = Number.isFinite(content?.valueDigits) ? content.valueDigits : 0;
+  if (content?.valueFormat === "currency") {
+    return formatCurrency(value, cfg.currencySymbol);
+  }
+  if (content?.valueFormat === "percent") {
+    const sign = content?.signed && value > 0 ? "+" : "";
+    return `${sign}${formatNumber(value, digits)}%`;
+  }
+  const sign = content?.signed && value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, digits)}`;
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -3739,6 +3769,15 @@ function buildAdvancedCellContent(cellKey, payload, cfg) {
   }
   if (cellKey === "website_sessions_mtd") {
     return buildWebsiteSessionsMtdContent(sectionPayload, payload);
+  }
+  if (cellKey === "ytd_orders") {
+    return buildYtdOrdersContent(payload, cfg);
+  }
+  if (cellKey === "ytd_total_sales") {
+    return buildYtdTotalSalesContent(payload, cfg);
+  }
+  if (cellKey === "ytd_growth_rate") {
+    return buildYtdGrowthRateContent(payload, cfg);
   }
   if (cellKey === "new_vs_returning") {
     return buildNewVsReturningContent(sectionPayload, cfg);
@@ -3957,6 +3996,115 @@ function buildWebsiteSessionsMtdContent(payload, _rootPayload) {
     subtitle: "",
     body: "",
   };
+}
+
+function getYtdComparisonSnapshot(rootPayload) {
+  const payload = rootPayload && typeof rootPayload.ytd_comparison === "object" ? rootPayload.ytd_comparison : null;
+  const currentSales = parseNumber(payload?.current?.sales_amount);
+  const previousSales = parseNumber(payload?.previous?.sales_amount);
+  const currentOrders = parseNumber(payload?.current?.orders);
+  const previousOrders = parseNumber(payload?.previous?.orders);
+  const salesPctRaw = parseNumber(payload?.change?.sales_amount_pct);
+  const ordersPctRaw = parseNumber(payload?.change?.orders_pct);
+  const growthPctRaw = parseNumber(payload?.change?.growth_rate_pct);
+
+  return {
+    currentSales,
+    previousSales,
+    currentOrders,
+    previousOrders,
+    salesPct: Number.isFinite(salesPctRaw) ? salesPctRaw : calcPercentChange(currentSales, previousSales),
+    ordersPct: Number.isFinite(ordersPctRaw) ? ordersPctRaw : calcPercentChange(currentOrders, previousOrders),
+    growthPct: Number.isFinite(growthPctRaw) ? growthPctRaw : calcPercentChange(currentSales, previousSales),
+  };
+}
+
+function buildYtdMetricLikeContent({
+  title,
+  value,
+  valueFormat,
+  valueDigits = 0,
+  signed = false,
+  changePct,
+  previousText,
+  unavailableSummary,
+  trendSummary,
+}) {
+  const unavailable = !Number.isFinite(value);
+  const trend = resolveTrend(changePct, "");
+  const trendPillClass = trend === "up" ? "trend-pill-up" : trend === "down" ? "trend-pill-down" : "trend-pill-flat";
+  const changeSign = Number.isFinite(changePct) && changePct > 0 ? "+" : "";
+  const changeText = Number.isFinite(changePct) ? `${trendArrow(trend)} ${changeSign}${formatNumber(changePct, 0)}%` : "--";
+  const defaultSummary = unavailable
+    ? unavailableSummary || "YTD data unavailable"
+    : trend === "up"
+      ? "Up vs last year YTD"
+      : trend === "down"
+        ? "Down vs last year YTD"
+        : "Flat vs last year YTD";
+
+  return {
+    mode: "metric_like",
+    title,
+    value,
+    valueFormat,
+    valueDigits,
+    signed,
+    valueText: "--",
+    trendPillClass,
+    changeText,
+    trendSummary: trendSummary || defaultSummary,
+    trendSummaryClass: trendClass(trend),
+    previousText: previousText || "LY YTD: --",
+    subtitle: "",
+    body: "",
+  };
+}
+
+function buildYtdOrdersContent(rootPayload, _cfg) {
+  const snapshot = getYtdComparisonSnapshot(rootPayload);
+  return buildYtdMetricLikeContent({
+    title: "Orders YTD",
+    value: snapshot.currentOrders,
+    valueFormat: "count",
+    valueDigits: 0,
+    changePct: snapshot.ordersPct,
+    previousText: Number.isFinite(snapshot.previousOrders) ? `LY YTD: ${formatNumber(snapshot.previousOrders, 0)}` : "LY YTD: --",
+    unavailableSummary: "YTD orders unavailable",
+  });
+}
+
+function buildYtdTotalSalesContent(rootPayload, cfg) {
+  const snapshot = getYtdComparisonSnapshot(rootPayload);
+  return buildYtdMetricLikeContent({
+    title: "Total Sales YTD",
+    value: snapshot.currentSales,
+    valueFormat: "currency",
+    valueDigits: 0,
+    changePct: snapshot.salesPct,
+    previousText: Number.isFinite(snapshot.previousSales)
+      ? `LY YTD: ${formatCurrency(snapshot.previousSales, cfg.currencySymbol)}`
+      : "LY YTD: --",
+    unavailableSummary: "YTD sales unavailable",
+  });
+}
+
+function buildYtdGrowthRateContent(rootPayload, cfg) {
+  const snapshot = getYtdComparisonSnapshot(rootPayload);
+  return buildYtdMetricLikeContent({
+    title: "Growth Rate YTD",
+    value: snapshot.growthPct,
+    valueFormat: "percent",
+    valueDigits: 0,
+    signed: true,
+    changePct: snapshot.growthPct,
+    previousText:
+      Number.isFinite(snapshot.currentSales) || Number.isFinite(snapshot.previousSales)
+        ? `Current / LY YTD: ${formatCurrencySafe(snapshot.currentSales, cfg)} / ${formatCurrencySafe(snapshot.previousSales, cfg)}`
+        : "Current / LY YTD: --",
+    unavailableSummary: "YTD growth unavailable",
+    trendSummary: "Revenue growth vs last year YTD",
+  });
 }
 
 function buildNewVsReturningContent(payload, cfg) {
