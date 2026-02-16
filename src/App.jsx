@@ -2769,6 +2769,7 @@ function normalizeWidgetKey(key) {
   }
   if (
     trimmed === "goal_panel" ||
+    trimmed === "goal_ytd_panel" ||
     trimmed === "chart_panel" ||
     trimmed === "clock_panel" ||
     trimmed === "quick_links_panel" ||
