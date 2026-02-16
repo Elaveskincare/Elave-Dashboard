@@ -1365,6 +1365,8 @@ async function getShopifySalesYtdComparableSnapshot(now) {
   let previousYtdSales = 0;
   let currentYtdOrders = 0;
   let previousYtdOrders = 0;
+  let previousFullYearSales = 0;
+  let previousFullYearOrders = 0;
 
   table.rows.forEach((row) => {
     const dayRaw = readShopifyqlCell(row, table.columnIndex, "day");
@@ -1385,12 +1387,21 @@ async function getShopifySalesYtdComparableSnapshot(now) {
       return;
     }
 
-    if (dayKey.slice(0, 4) === previousYearPrefix && dayKey <= previousComparableYmd) {
+    if (dayKey.slice(0, 4) === previousYearPrefix) {
       if (Number.isFinite(sales)) {
-        previousYtdSales += sales;
+        previousFullYearSales += sales;
       }
       if (Number.isFinite(orders)) {
-        previousYtdOrders += orders;
+        previousFullYearOrders += orders;
+      }
+
+      if (dayKey <= previousComparableYmd) {
+        if (Number.isFinite(sales)) {
+          previousYtdSales += sales;
+        }
+        if (Number.isFinite(orders)) {
+          previousYtdOrders += orders;
+        }
       }
     }
   });
@@ -1401,6 +1412,8 @@ async function getShopifySalesYtdComparableSnapshot(now) {
     previous_ytd_sales: round(previousYtdSales, 2),
     current_ytd_orders: round(currentYtdOrders, 2),
     previous_ytd_orders: round(previousYtdOrders, 2),
+    previous_full_year_sales: round(previousFullYearSales, 2),
+    previous_full_year_orders: round(previousFullYearOrders, 2),
     range: {
       since: toYmd(previousYearStart),
       until: toYmd(tomorrow),
@@ -1791,6 +1804,7 @@ async function getYtdComparisonPayload() {
   const currentYearStart = startOfUtcYear(now);
   const previousYearStart = addUtcYears(currentYearStart, -1);
   const previousComparableEnd = previousYtdComparableEnd(now);
+  const previousYearEnd = new Date(currentYearStart.getTime() - 1);
 
   let shopifyYtdSnapshot = null;
   try {
@@ -1804,9 +1818,13 @@ async function getYtdComparisonPayload() {
   const previousRows = filterReportableOrderRows(
     filterBetween(orderRows, "created_at_utc", previousYearStart, previousComparableEnd)
   );
+  const previousFullYearRows = filterReportableOrderRows(
+    filterBetween(orderRows, "created_at_utc", previousYearStart, previousYearEnd)
+  );
 
   const currentTotals = aggregateOrders(currentRows);
   const previousTotals = aggregateOrders(previousRows);
+  const previousFullYearTotals = aggregateOrders(previousFullYearRows);
 
   const currentSales = Number.isFinite(shopifyYtdSnapshot?.current_ytd_sales)
     ? shopifyYtdSnapshot.current_ytd_sales
@@ -1827,6 +1845,16 @@ async function getYtdComparisonPayload() {
     ? shopifyYtdSnapshot.previous_ytd_orders
     : previousRows.length
       ? previousTotals.orders_count
+      : null;
+  const previousYearTotalSales = Number.isFinite(shopifyYtdSnapshot?.previous_full_year_sales)
+    ? shopifyYtdSnapshot.previous_full_year_sales
+    : previousFullYearRows.length
+      ? previousFullYearTotals.total_sales
+      : null;
+  const previousYearTotalOrders = Number.isFinite(shopifyYtdSnapshot?.previous_full_year_orders)
+    ? shopifyYtdSnapshot.previous_full_year_orders
+    : previousFullYearRows.length
+      ? previousFullYearTotals.orders_count
       : null;
   const salesPct = pctChange(currentSales, previousSales);
   const ordersPct = pctChange(currentOrders, previousOrders);
@@ -1850,6 +1878,13 @@ async function getYtdComparisonPayload() {
       sales_amount: round(previousSales, 2),
       orders: round(previousOrders, 0),
       row_count: previousRows.length,
+    },
+    previous_year: {
+      sales_amount: round(previousYearTotalSales, 2),
+      orders: round(previousYearTotalOrders, 0),
+      row_count: previousFullYearRows.length,
+      start_utc: previousYearStart.toISOString(),
+      end_utc: previousYearEnd.toISOString(),
     },
     change: {
       sales_amount_pct: salesPct,

@@ -1409,7 +1409,7 @@ function App() {
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <CardTitle className="text-lg">Target Progress (YTD)</CardTitle>
-                            <CardDescription>YTD total sales vs yearly target and last year YTD</CardDescription>
+                            <CardDescription>YTD total sales vs yearly target and LY YTD</CardDescription>
                           </div>
                           <div className="flex items-center gap-2">
                             <Button size="sm" variant="outline" onClick={handleSetYearlyTarget}>
@@ -1473,7 +1473,6 @@ function App() {
 
                         <div className="mt-auto grid grid-cols-1 gap-x-7 gap-y-2 text-[clamp(0.96rem,0.95vw,1.2rem)] leading-[1.32] text-zinc-300 md:grid-cols-2">
                           <p>{ytdGoalData.milestonePrev}</p>
-                          <p>{ytdGoalData.milestoneTarget}</p>
                           <p className={ytdGoalData.gapPrevClass}>{ytdGoalData.gapPrev}</p>
                           <p className={ytdGoalData.gapTargetClass}>{ytdGoalData.gapTarget}</p>
                         </div>
@@ -3387,13 +3386,13 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
   const empty = {
     currentText: "--",
     currentValue: NaN,
-    currentNote: "YTD previous: --",
+    currentNote: "LY YTD (same date): --",
     targetText: "--",
     targetValue: NaN,
     targetNote: "gap to target: set target",
     previousText: "--",
     previousValue: NaN,
-    previousNote: "LY YTD",
+    previousNote: "LY Full-Year Total: --",
     statusText: "Set yearly target",
     statusClass: "text-zinc-400",
     progressText: "--",
@@ -3401,8 +3400,7 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
     progressClamped: 0,
     fillClass: "",
     milestonePrev: "Pace checkpoint today: --",
-    milestoneTarget: "LY YTD vs target: --",
-    gapPrev: "Gap vs last year YTD: --",
+    gapPrev: "Gap vs LY YTD: --",
     gapTarget: "Gap to target: set target",
     gapPrevClass: "text-zinc-300",
     gapTargetClass: "text-zinc-300",
@@ -3415,14 +3413,17 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
 
   const current = parseNumber(ytdPayload?.current?.sales_amount);
   const previous = parseNumber(ytdPayload?.previous?.sales_amount);
+  const previousYearTotal = parseNumber(ytdPayload?.previous_year?.sales_amount);
   const growthFromPayload = parseNumber(ytdPayload?.change?.sales_amount_pct);
   const growthVsLyPct = Number.isFinite(growthFromPayload) ? growthFromPayload : calcPercentChange(current, previous);
   const referenceDateTs = Date.parse(String(ytdPayload?.period?.current_end_utc || ""));
   const referenceDate = Number.isFinite(referenceDateTs) ? new Date(referenceDateTs) : new Date();
   const currentNote = Number.isFinite(previous)
-    ? `YTD previous: ${formatCurrency(previous, cfg.currencySymbol)}`
-    : "YTD previous: --";
-  const previousNote = String(ytdPayload?.source?.sales || "LY YTD").trim() || "LY YTD";
+    ? `LY YTD (same date): ${formatCurrency(previous, cfg.currencySymbol)}`
+    : "LY YTD (same date): --";
+  const previousNote = Number.isFinite(previousYearTotal)
+    ? `LY Full-Year Total: ${formatCurrency(previousYearTotal, cfg.currencySymbol)}`
+    : "LY Full-Year Total: --";
   const yearKey = getCurrentGoalYearKey();
   const annualStoredTarget = getYearlyTargetForKey(yearlyTargets, yearKey);
   const annualConfigTarget = getConfigYearTargetForKey(cfg.salesTargetsByYear, yearKey);
@@ -3448,7 +3449,7 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
       targetValue: target,
       milestonePrev: Number.isFinite(current) ? `Pace checkpoint today: ${formatNumber(dayOfYearPercent(referenceDate), 1)}%` : empty.milestonePrev,
       gapPrev: Number.isFinite(growthVsLyPct)
-        ? `Gap vs last year YTD: ${formatSignedPercent(growthVsLyPct, 1)}`
+        ? `Gap vs LY YTD: ${formatSignedPercent(growthVsLyPct, 1)}`
         : empty.gapPrev,
     };
   }
@@ -3481,11 +3482,11 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
   }
 
   const gapPrev = Number.isFinite(deltaVsLy)
-    ? `${deltaVsLy >= 0 ? "Gap vs last year YTD: +" : "Gap vs last year YTD: -"}${formatCurrency(
+    ? `${deltaVsLy >= 0 ? "Gap vs LY YTD: +" : "Gap vs LY YTD: -"}${formatCurrency(
         Math.abs(deltaVsLy),
         cfg.currencySymbol
       )} (${formatPercentSafe(growthVsLyPct)})`
-    : "Gap vs last year YTD: --";
+    : "Gap vs LY YTD: --";
 
   const gapTarget = beatTarget
     ? `Gap to target: +${formatCurrency(Math.abs(delta), cfg.currencySymbol)}`
@@ -3512,9 +3513,6 @@ function buildYtdGoalData({ cfg, cellsPayload, yearlyTargets }) {
     progressClamped,
     fillClass,
     milestonePrev: `Pace checkpoint today: ${formatNumber(expectedProgressPct, 1)}% (${formatNumber(dayOfYear(referenceDate), 0)}/${formatNumber(daysInYear(referenceDate), 0)} days)`,
-    milestoneTarget: Number.isFinite(previous)
-      ? `LY YTD vs target: ${formatNumber((previous / target) * 100, 1)}%`
-      : "LY YTD vs target: --",
     gapPrev,
     gapTarget,
     gapPrevClass,
