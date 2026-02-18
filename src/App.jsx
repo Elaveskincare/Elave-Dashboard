@@ -55,6 +55,7 @@ const VALUE_TWEEN_DURATION_MS = 650;
 const VALUE_TWEEN_MIN_DELTA = 0.01;
 const CARD_REVEAL_STAGGER_MS = 675;
 const CARD_REVEAL_DURATION_MS = 2625;
+const TRACE_AFTERGLOW_DURATION_MS = 980;
 
 const fixedWidgetSeed = {
   goal_panel: {
@@ -305,6 +306,8 @@ function App() {
   const cycleTimerRef = useRef(null);
   const bootHideTimerRef = useRef(null);
   const wasFullscreenRef = useRef(false);
+  const activeTraceCardRef = useRef(null);
+  const traceFadeTimersRef = useRef(new Map());
 
   const setBootStatus = useCallback((message, mode = "") => {
     setBootStatusState({ message, mode, visible: true });
@@ -849,6 +852,164 @@ function App() {
     [setCardLayout]
   );
 
+  const clearTraceFadeTimer = useCallback((card) => {
+    if (!(card instanceof HTMLElement)) {
+      return;
+    }
+
+    const timerId = traceFadeTimersRef.current.get(card);
+    if (!timerId) {
+      return;
+    }
+
+    window.clearTimeout(timerId);
+    traceFadeTimersRef.current.delete(card);
+  }, []);
+
+  const clearAllTraceFadeTimers = useCallback(() => {
+    traceFadeTimersRef.current.forEach((timerId, card) => {
+      window.clearTimeout(timerId);
+      if (card instanceof HTMLElement) {
+        card.classList.remove("trace-afterglow");
+      }
+    });
+    traceFadeTimersRef.current.clear();
+  }, []);
+
+  const queueTraceAfterglow = useCallback(
+    (card) => {
+      if (!(card instanceof HTMLElement)) {
+        return;
+      }
+
+      clearTraceFadeTimer(card);
+      card.classList.remove("trace-active");
+      card.classList.remove("trace-afterglow");
+      card.style.removeProperty("--trace-tilt-x");
+      card.style.removeProperty("--trace-tilt-y");
+
+      // Restart the fade animation when rapidly moving between cards.
+      void card.offsetWidth;
+      card.classList.add("trace-afterglow");
+
+      const timerId = window.setTimeout(() => {
+        card.classList.remove("trace-afterglow");
+        traceFadeTimersRef.current.delete(card);
+      }, TRACE_AFTERGLOW_DURATION_MS + 32);
+      traceFadeTimersRef.current.set(card, timerId);
+    },
+    [clearTraceFadeTimer]
+  );
+
+  const resetTraceCardStyles = useCallback(
+    (card) => {
+      if (!(card instanceof HTMLElement)) {
+        return;
+      }
+
+      clearTraceFadeTimer(card);
+      card.classList.remove("trace-active");
+      card.classList.remove("trace-afterglow");
+      card.style.removeProperty("--trace-tilt-x");
+      card.style.removeProperty("--trace-tilt-y");
+      card.style.removeProperty("--trace-x");
+      card.style.removeProperty("--trace-y");
+    },
+    [clearTraceFadeTimer]
+  );
+
+  const clearActiveTraceCard = useCallback(() => {
+    const activeCard = activeTraceCardRef.current;
+    if (!activeCard) {
+      return;
+    }
+
+    resetTraceCardStyles(activeCard);
+    activeTraceCardRef.current = null;
+  }, [resetTraceCardStyles]);
+
+  const onMetricsBoardPointerMove = useCallback(
+    (event) => {
+      if (event.pointerType === "touch") {
+        return;
+      }
+      if (activeDragMetric) {
+        clearActiveTraceCard();
+        return;
+      }
+
+      const board = metricsBoardRef.current;
+      if (!board) {
+        return;
+      }
+
+      const pointerTarget = event.target instanceof Element ? event.target : null;
+      if (!pointerTarget) {
+        return;
+      }
+      const nextCard = pointerTarget ? pointerTarget.closest(".layout-widget") : null;
+      if (!(nextCard instanceof HTMLElement) || !board.contains(nextCard)) {
+        const activeCard = activeTraceCardRef.current;
+        if (activeCard) {
+          queueTraceAfterglow(activeCard);
+          activeTraceCardRef.current = null;
+        }
+        return;
+      }
+
+      const cardWidth = nextCard.offsetWidth;
+      const cardHeight = nextCard.offsetHeight;
+      if (!cardWidth || !cardHeight) {
+        return;
+      }
+
+      const boardRect = board.getBoundingClientRect();
+      const cardLeft = boardRect.left + nextCard.offsetLeft;
+      const cardTop = boardRect.top + nextCard.offsetTop;
+      if (!Number.isFinite(cardLeft) || !Number.isFinite(cardTop)) {
+        return;
+      }
+
+      if (activeTraceCardRef.current && activeTraceCardRef.current !== nextCard) {
+        queueTraceAfterglow(activeTraceCardRef.current);
+      }
+
+      activeTraceCardRef.current = nextCard;
+      clearTraceFadeTimer(nextCard);
+      nextCard.classList.remove("trace-afterglow");
+      nextCard.classList.add("trace-active");
+
+      const relativeX = clamp((event.clientX - cardLeft) / cardWidth, 0, 1);
+      const relativeY = clamp((event.clientY - cardTop) / cardHeight, 0, 1);
+      const overInteractiveControl = Boolean(
+        pointerTarget.closest("button, a, input, select, textarea, [role='button'], [data-hover-controls='true']")
+      );
+      const maxCardDimension = Math.max(cardWidth, cardHeight);
+      const sizeTiltScale = clamp(460 / maxCardDimension, 0.45, 1);
+      const tiltMultiplier = overInteractiveControl ? 0 : sizeTiltScale;
+      const tiltX = (0.5 - relativeY) * 6.5 * tiltMultiplier;
+      const tiltY = (relativeX - 0.5) * 7.5 * tiltMultiplier;
+      const traceX = overInteractiveControl ? 50 : relativeX * 100;
+      const traceY = overInteractiveControl ? 50 : relativeY * 100;
+
+      nextCard.style.setProperty("--trace-tilt-x", `${tiltX.toFixed(2)}deg`);
+      nextCard.style.setProperty("--trace-tilt-y", `${tiltY.toFixed(2)}deg`);
+      nextCard.style.setProperty("--trace-x", `${traceX.toFixed(2)}%`);
+      nextCard.style.setProperty("--trace-y", `${traceY.toFixed(2)}%`);
+    },
+    [activeDragMetric, clearActiveTraceCard, clearTraceFadeTimer, queueTraceAfterglow]
+  );
+
+  const onMetricsBoardPointerLeave = useCallback(() => {
+    const activeCard = activeTraceCardRef.current;
+    if (!activeCard) {
+      return;
+    }
+
+    queueTraceAfterglow(activeCard);
+    activeTraceCardRef.current = null;
+  }, [queueTraceAfterglow]);
+
   const onLibraryDragStart = useCallback((event, widgetKey) => {
     setActiveDragMetric(widgetKey);
     setActiveDragSource("library");
@@ -859,6 +1020,7 @@ function App() {
   }, []);
 
   const onWidgetDragStart = useCallback((event, widgetKey) => {
+    clearActiveTraceCard();
     setActiveDragMetric(widgetKey);
     setActiveDragSource("board");
     setDraggingWidgetId(widgetKey);
@@ -866,7 +1028,7 @@ function App() {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", widgetKey);
     }
-  }, []);
+  }, [clearActiveTraceCard]);
 
   const resolvePreferredDropSlot = useCallback(
     (widgetKey, desiredSlot) => {
@@ -960,11 +1122,41 @@ function App() {
       setActiveDragSource("");
       setDragDropSlot(null);
       setDraggingWidgetId("");
+      clearActiveTraceCard();
     };
 
     window.addEventListener("dragend", onAnyDragEnd);
     return () => window.removeEventListener("dragend", onAnyDragEnd);
-  }, []);
+  }, [clearActiveTraceCard]);
+
+  useEffect(() => {
+    const onWindowBlur = () => {
+      clearActiveTraceCard();
+      clearAllTraceFadeTimers();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        clearActiveTraceCard();
+        clearAllTraceFadeTimers();
+      }
+    };
+
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [clearActiveTraceCard, clearAllTraceFadeTimers]);
+
+  useEffect(
+    () => () => {
+      clearActiveTraceCard();
+      clearAllTraceFadeTimers();
+    },
+    [clearActiveTraceCard, clearAllTraceFadeTimers]
+  );
 
   useEffect(() => {
     const indicator = dropIndicatorRef.current;
@@ -1283,6 +1475,9 @@ function App() {
             <div
               ref={metricsBoardRef}
               className={cn("metrics-board rounded-xl", dragTargetActive && "drag-target")}
+              onPointerMove={onMetricsBoardPointerMove}
+              onPointerLeave={onMetricsBoardPointerLeave}
+              onPointerCancel={onMetricsBoardPointerLeave}
               onDragOver={onMetricsBoardDragOver}
               onDrop={onMetricsBoardDrop}
               onDragLeave={onMetricsBoardDragLeave}
@@ -1321,14 +1516,19 @@ function App() {
                             <CardTitle className="text-lg">Target Progress</CardTitle>
                             <CardDescription>MTD total sales vs target and last month total</CardDescription>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2" data-hover-controls="true">
                             <Button size="sm" variant="outline" onClick={handleSetMonthlyTarget}>
                               Set Target
                             </Button>
                             <Button size="sm" variant="outline" onClick={handleClearMonthlyTarget}>
                               Clear
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => handleRemoveWidget(widget.key)}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
+                              onClick={() => handleRemoveWidget(widget.key)}
+                            >
                               Remove
                             </Button>
                           </div>
@@ -1411,14 +1611,19 @@ function App() {
                             <CardTitle className="text-lg">Target Progress (YTD)</CardTitle>
                             <CardDescription>YTD total sales vs yearly target and LY YTD</CardDescription>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2" data-hover-controls="true">
                             <Button size="sm" variant="outline" onClick={handleSetYearlyTarget}>
                               Set Target
                             </Button>
                             <Button size="sm" variant="outline" onClick={handleClearYearlyTarget}>
                               Clear
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => handleRemoveWidget(widget.key)}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
+                              onClick={() => handleRemoveWidget(widget.key)}
+                            >
                               Remove
                             </Button>
                           </div>

@@ -82,11 +82,157 @@ html {
   grid-auto-rows: var(--metric-row-height);
   gap: 0.85rem;
   position: relative;
+  perspective: 1450px;
+  transform-style: preserve-3d;
 }
 
 .layout-widget {
   grid-column: var(--widget-col-start) / span var(--widget-col-span);
   grid-row: var(--widget-row-start) / span var(--widget-row-span);
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+  transform-style: preserve-3d;
+  will-change: transform, box-shadow, filter;
+  --trace-x: 50%;
+  --trace-y: 50%;
+  --trace-tilt-x: 0deg;
+  --trace-tilt-y: 0deg;
+  transform: translate3d(0, 0, 0) rotateX(var(--trace-tilt-x)) rotateY(var(--trace-tilt-y));
+  transition:
+    transform 780ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 780ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 780ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.layout-widget::before {
+  content: "";
+  position: absolute;
+  inset: -18%;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transform: scale(0.96);
+  background: radial-gradient(
+    70% 70% at var(--trace-x) var(--trace-y),
+    rgba(239, 245, 255, 0.153) 0%,
+    rgba(231, 239, 255, 0.077) 32%,
+    rgba(219, 229, 247, 0) 76%
+  );
+  filter: blur(16px);
+  transition:
+    opacity 780ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 780ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.layout-widget::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.02) inset,
+    0 0 20px rgba(255, 255, 255, 0.06);
+  transition:
+    opacity 760ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 760ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 760ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.layout-widget > * {
+  position: relative;
+  z-index: 1;
+}
+
+.layout-widget.trace-active {
+  transform: translate3d(0, -4px, 20px) rotateX(var(--trace-tilt-x)) rotateY(var(--trace-tilt-y));
+  box-shadow:
+    0 10px 18px -20px rgba(0, 0, 0, 0.64),
+    0 0 10px -14px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 14px -11px rgba(236, 241, 255, 0.192),
+    0 0 24px -18px rgba(228, 235, 248, 0.122);
+  filter: brightness(1.004) saturate(1.004);
+  transition-duration: 150ms, 170ms, 170ms;
+}
+
+.layout-widget.trace-active::before {
+  opacity: 0.26;
+  transform: scale(1);
+  transition-duration: 170ms, 170ms;
+}
+
+.layout-widget.trace-active::after {
+  opacity: 0.158;
+  border-color: rgba(240, 246, 255, 0.14);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.053) inset,
+    0 0 10px rgba(230, 238, 255, 0.07);
+  transition-duration: 170ms;
+}
+
+.layout-widget.trace-afterglow {
+  animation: trace-afterglow-shadow 980ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.layout-widget.trace-afterglow::before {
+  animation: trace-afterglow-halo 980ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.layout-widget.trace-afterglow::after {
+  animation: trace-afterglow-rim 980ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes trace-afterglow-shadow {
+  0% {
+    box-shadow:
+      0 9px 16px -20px rgba(0, 0, 0, 0.54),
+      0 0 10px -14px rgba(0, 0, 0, 0.36),
+      0 0 0 1px rgba(255, 255, 255, 0.03),
+      0 0 12px -10px rgba(232, 240, 255, 0.146),
+      0 0 20px -18px rgba(225, 233, 248, 0.095);
+    filter: brightness(1.002) saturate(1.003);
+  }
+  100% {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.015);
+    filter: none;
+  }
+}
+
+@keyframes trace-afterglow-rim {
+  0% {
+    opacity: 0.176;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes trace-afterglow-halo {
+  0% {
+    opacity: 0.214;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.layout-widget.card-dragging {
+  transform: none !important;
+  filter: none !important;
+  animation: none !important;
+}
+
+.layout-widget.card-dragging::before,
+.layout-widget.card-dragging::after {
+  opacity: 0 !important;
+  animation: none !important;
 }
 
 .metrics-drop-indicator {
@@ -507,5 +653,16 @@ html {
     animation: none;
     opacity: 1;
     filter: none;
+  }
+
+  .layout-widget {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .layout-widget::before,
+  .layout-widget::after {
+    opacity: 0 !important;
+    transition: none !important;
   }
 }
