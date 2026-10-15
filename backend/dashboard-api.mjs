@@ -1283,6 +1283,8 @@ async function getShopifySalesComparableSnapshot(now) {
   let previousComparable = 0;
   let previousNetComparable = 0;
   let previousOrders = 0;
+  let todaySales = 0;
+  const todayKey = toYmd(now);
 
   table.rows.forEach((row) => {
     const dayRaw = readShopifyqlCell(row, table.columnIndex, "day");
@@ -1297,6 +1299,9 @@ async function getShopifySalesComparableSnapshot(now) {
     if (dayKey.slice(0, 7) === currentMonthPrefix) {
       if (Number.isFinite(sales)) {
         currentMtd += sales;
+        if (dayKey === todayKey) {
+          todaySales += sales;
+        }
       }
       if (Number.isFinite(netSales)) {
         currentNetMtd += netSales;
@@ -1328,6 +1333,7 @@ async function getShopifySalesComparableSnapshot(now) {
     current_mtd: round(currentMtd, 2),
     current_mtd_net_sales: round(currentNetMtd, 2),
     current_mtd_orders: round(currentOrders, 2),
+    today_sales: round(todaySales, 2),
     previous_mtd: round(previousComparable, 2),
     previous_mtd_net_sales: round(previousNetComparable, 2),
     previous_mtd_orders: round(previousOrders, 2),
@@ -1667,7 +1673,7 @@ async function buildSummaryPayload() {
   const prevMonthStart = addUtcMonths(currentMonthStart, -1);
   const prevComparableEnd = previousMtdComparableEnd(now, currentMonthStart);
 
-  const [orderRows, hourlyRows, salesMonthSnapshot, salesComparableSnapshot, sameTimeSnapshot] = await Promise.all([
+  const [orderRows, hourlyRows, salesMonthSnapshot, salesComparableSnapshot] = await Promise.all([
     fetchOrderRowsSinceIso(prevMonthStart.toISOString()),
     fetchHourlyRowsSinceIso(prevMonthStart.toISOString()),
     getShopifySalesMonthSnapshot(now).catch((error) => {
@@ -1676,10 +1682,6 @@ async function buildSummaryPayload() {
     }),
     getShopifySalesComparableSnapshot(now).catch((error) => {
       console.warn("ShopifyQL comparable snapshot unavailable in summary:", error.message);
-      return null;
-    }),
-    getShopifySameTimeComparableSnapshot(now).catch((error) => {
-      console.warn("Shopify same-time snapshot unavailable in summary:", error.message);
       return null;
     }),
   ]);
@@ -1722,26 +1724,8 @@ async function buildSummaryPayload() {
   const previousAov = previousOrders > 0 ? previousNetSalesForAov / previousOrders : null;
   const currentRoas = currentAdSpend > 0 ? currentSales / currentAdSpend : null;
   const previousRoas = previousAdSpend > 0 ? previousSales / previousAdSpend : null;
-  const currentSalesForChange = Number.isFinite(sameTimeSnapshot?.current_mtd_sales) ? sameTimeSnapshot.current_mtd_sales : currentSales;
-  const previousSalesForChange = Number.isFinite(sameTimeSnapshot?.previous_mtd_sales)
-    ? sameTimeSnapshot.previous_mtd_sales
-    : previousSales;
-  const currentOrdersForChange = Number.isFinite(sameTimeSnapshot?.current_mtd_orders)
-    ? sameTimeSnapshot.current_mtd_orders
-    : currentOrders;
-  const previousOrdersForChange = Number.isFinite(sameTimeSnapshot?.previous_mtd_orders)
-    ? sameTimeSnapshot.previous_mtd_orders
-    : previousOrders;
-  const currentNetSalesForChange = Number.isFinite(sameTimeSnapshot?.current_mtd_net_sales)
-    ? sameTimeSnapshot.current_mtd_net_sales
-    : currentNetSalesForAov;
-  const previousNetSalesForChange = Number.isFinite(sameTimeSnapshot?.previous_mtd_net_sales)
-    ? sameTimeSnapshot.previous_mtd_net_sales
-    : previousNetSalesForAov;
-  const currentAovForChange = currentOrdersForChange > 0 ? currentNetSalesForChange / currentOrdersForChange : null;
-  const previousAovForChange = previousOrdersForChange > 0 ? previousNetSalesForChange / previousOrdersForChange : null;
-  const salesPctChange = pctChange(currentSalesForChange, previousSalesForChange);
-  const ordersPctChange = pctChange(currentOrdersForChange, previousOrdersForChange);
+  const salesPctChange = pctChange(currentSales, previousSales);
+  const ordersPctChange = pctChange(currentOrders, previousOrders);
 
   const current = {
     sales_amount: round(currentSales, 2),
@@ -2109,11 +2093,15 @@ async function getDailySalesPace() {
   const prevMonthStart = addUtcMonths(monthStart, -1);
   const prevMonthEnd = new Date(monthStart.getTime() - 1000);
 
-  const [monthlyOrdersRaw, prevMonthOrdersRaw, salesMonthSnapshot] = await Promise.all([
+  const [monthlyOrdersRaw, prevMonthOrdersRaw, salesMonthSnapshot, salesComparableSnapshot] = await Promise.all([
     fetchOrderRowsSinceIso(monthStart.toISOString()),
     fetchOrderRowsSinceIso(prevMonthStart.toISOString()),
     getShopifySalesMonthSnapshot(now).catch((error) => {
       console.warn("ShopifyQL month snapshot unavailable in pace:", error.message);
+      return null;
+    }),
+    getShopifySalesComparableSnapshot(now).catch((error) => {
+      console.warn("ShopifyQL daily snapshot unavailable in pace:", error.message);
       return null;
     }),
   ]);
@@ -2147,7 +2135,12 @@ async function getDailySalesPace() {
 
   const todayStart = startOfUtcDay(now);
   const todayRows = filterBetween(monthlyOrders, "created_at_utc", todayStart, now);
-  const todaySales = aggregateOrders(todayRows).total_sales || 0;
+  const todayOrderSales = aggregateOrders(todayRows).total_sales || 0;
+  const todaySales = Number.isFinite(salesComparableSnapshot?.today_sales)
+    ? salesComparableSnapshot.today_sales
+    : Number.isFinite(salesMonthSnapshot?.current?.total_sales)
+      ? null
+      : todayOrderSales;
 
   const dayOfMonth = dayOfMonthInReportingZone(now);
   const totalDays = daysInUtcMonth(now);
@@ -2166,8 +2159,15 @@ async function getDailySalesPace() {
     mtd_gross_sales: round(mtdGrossSales, 2),
     mtd_net_sales: round(mtdNetSales, 2),
     today_sales: round(todaySales, 2),
+    today_sales_source: Number.isFinite(salesComparableSnapshot?.today_sales)
+      ? "shopifyql"
+      : Number.isFinite(todaySales)
+        ? "orders_table"
+        : "unavailable",
     required_daily_pace: round(requiredDailyPace, 2),
-    on_track_today: Number.isFinite(requiredDailyPace) ? todaySales >= requiredDailyPace : null,
+    on_track_today: Number.isFinite(requiredDailyPace) && Number.isFinite(todaySales)
+      ? todaySales >= requiredDailyPace
+      : null,
     previous_month_gross_sales: round(previousMonthGrossSales, 2),
     previous_month_total_sales: round(previousMonthTotalSales, 2),
     previous_month_net_sales: round(previousMonthNetSales, 2),

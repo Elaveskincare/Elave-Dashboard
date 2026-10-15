@@ -44,6 +44,7 @@ const fallbackConfig = {
 };
 
 const LAYOUT_STORAGE_KEY = "elave_dash_widget_layout_v2";
+const SALES_TODAY_LAYOUT_MIGRATION_KEY = "elave_dash_sales_today_added_v1";
 const MONTHLY_TARGETS_STORAGE_KEY = "elave_dash_monthly_targets_v1";
 const YEARLY_TARGETS_STORAGE_KEY = "elave_dash_yearly_targets_v1";
 const METRIC_WIDGET_PREFIX = "metric:";
@@ -117,6 +118,7 @@ const fixedWidgetSeed = {
 const DEFAULT_CARD_KEYS = [
   "goal_panel",
   `${METRIC_WIDGET_PREFIX}sales`,
+  `${ADVANCED_WIDGET_PREFIX}sales_today`,
   `${METRIC_WIDGET_PREFIX}orders`,
   `${METRIC_WIDGET_PREFIX}aov`,
   `${METRIC_WIDGET_PREFIX}roas`,
@@ -166,6 +168,7 @@ const metricSeed = {
 };
 
 const advancedCellSeed = [
+  { key: "sales_today", label: "Sales Today", colSpan: 3, rowSpan: 1 },
   { key: "top_products_units", label: "Top Products (MTD by Units)", colSpan: 3, rowSpan: 2 },
   { key: "top_products_revenue", label: "Top Products (MTD by Revenue)", colSpan: 3, rowSpan: 2 },
   { key: "product_momentum", label: "Product Momentum", colSpan: 3, rowSpan: 2 },
@@ -325,8 +328,21 @@ function App() {
   useEffect(() => {
     setBootStatus("Binding state");
     const savedLayout = loadCardLayout();
-    if (Array.isArray(savedLayout)) {
-      setCardLayout(savedLayout);
+    const todayWidgetKey = toAdvancedWidgetKey("sales_today");
+    let overviewLayout = savedLayout;
+    try {
+      if (window.localStorage.getItem(SALES_TODAY_LAYOUT_MIGRATION_KEY) !== "1") {
+        if (Array.isArray(savedLayout) && !savedLayout.some((entry) => normalizeLayoutEntry(entry)?.key === todayWidgetKey)) {
+          overviewLayout = [...savedLayout, { key: todayWidgetKey, col: 1, row: 1 }];
+          saveCardLayout(overviewLayout);
+        }
+        window.localStorage.setItem(SALES_TODAY_LAYOUT_MIGRATION_KEY, "1");
+      }
+    } catch (_error) {
+      // The default layout still includes the cell if browser storage is unavailable.
+    }
+    if (Array.isArray(overviewLayout)) {
+      setCardLayout(overviewLayout);
       setHasCustomLayout(true);
     }
     setLayoutHydrated(true);
@@ -626,7 +642,12 @@ function App() {
       return { text: "Trend: --", className: "" };
     }
     const metric = metricCatalog[currentMetric];
-    const change = metric.changeCol ? parseNumber(latestRow[metric.changeCol]) : NaN;
+    const summarySnapshot = getSummaryMetricSnapshot(metric, cellsPayload);
+    const change = summarySnapshot
+      ? summarySnapshot.change
+      : metric.changeCol
+        ? parseNumber(latestRow[metric.changeCol])
+        : NaN;
     const trend = resolveTrend(change, metric.directionCol ? latestRow[metric.directionCol] : "");
     const sign = Number.isFinite(change) && change > 0 ? "+" : "";
     const pct = Number.isFinite(change) ? `${sign}${formatNumber(change, 0)}%` : "--";
@@ -634,7 +655,7 @@ function App() {
       text: `Trend (${metric.label}): ${trendArrow(trend)} ${trendLabel(trend)} ${pct}`,
       className: trendClass(trend),
     };
-  }, [currentMetric, latestRow, metricCatalog]);
+  }, [cellsPayload, currentMetric, latestRow, metricCatalog]);
 
   useEffect(() => {
     if (locked || !cardRevealActive) {
@@ -2021,12 +2042,12 @@ function App() {
                 }
 
                 const summarySnapshot = getSummaryMetricSnapshot(meta, cellsPayload);
-                const value = summarySnapshot && Number.isFinite(summarySnapshot.value)
+                const value = summarySnapshot
                   ? summarySnapshot.value
                   : latestRow
                     ? parseNumber(latestRow[meta.valueCol])
                     : NaN;
-                const change = summarySnapshot && Number.isFinite(summarySnapshot.change)
+                const change = summarySnapshot
                   ? summarySnapshot.change
                   : latestRow && meta.changeCol
                     ? parseNumber(latestRow[meta.changeCol])
@@ -2035,7 +2056,7 @@ function App() {
                   ? resolveTrend(change, "")
                   : resolveTrend(change, latestRow && meta.directionCol ? latestRow[meta.directionCol] : "");
 
-                const previousActual = summarySnapshot && Number.isFinite(summarySnapshot.previousValue)
+                const previousActual = summarySnapshot
                   ? summarySnapshot.previousValue
                   : getPreviousMetricValue(previousRow, meta.valueCol);
                 const previousEstimated = estimatePreviousValue(value, change);
@@ -2055,11 +2076,13 @@ function App() {
                   : trend === "down"
                     ? "trend-pill-down"
                     : "trend-pill-flat";
-                const trendSummary = trend === "up"
-                  ? "Trending up this month"
-                  : trend === "down"
-                    ? "Down this period"
-                    : "Stable this period";
+                const trendSummary = !Number.isFinite(change)
+                  ? "Comparison unavailable"
+                  : trend === "up"
+                    ? "Trending up this month"
+                    : trend === "down"
+                      ? "Down this period"
+                      : "Stable this period";
                 const trendSummaryClass = trendClass(trend);
 
                 return (
@@ -3344,29 +3367,33 @@ function getSummaryMetricSnapshot(meta, cellsPayload) {
 
   const current = cellsPayload.kpis.current || {};
   const previous = cellsPayload.kpis.previous || {};
-  const change = cellsPayload.kpis.change || {};
-
   if (meta.key === "sales") {
+    const value = parseNumber(current.sales_amount);
+    const previousValue = parseNumber(previous.sales_amount);
     return {
-      value: parseNumber(current.sales_amount),
-      previousValue: parseNumber(previous.sales_amount),
-      change: parseNumber(change.sales_amount_pct),
+      value,
+      previousValue,
+      change: calcPercentChange(value, previousValue),
     };
   }
 
   if (meta.key === "orders") {
+    const value = parseNumber(current.orders);
+    const previousValue = parseNumber(previous.orders);
     return {
-      value: parseNumber(current.orders),
-      previousValue: parseNumber(previous.orders),
-      change: parseNumber(change.orders_pct),
+      value,
+      previousValue,
+      change: calcPercentChange(value, previousValue),
     };
   }
 
   if (meta.key === "aov") {
+    const value = parseNumber(current.aov);
+    const previousValue = parseNumber(previous.aov);
     return {
-      value: parseNumber(current.aov),
-      previousValue: parseNumber(previous.aov),
-      change: parseNumber(change.aov_pct),
+      value,
+      previousValue,
+      change: calcPercentChange(value, previousValue),
     };
   }
 
@@ -3379,6 +3406,14 @@ function formatMetricValue(meta, value, currencySymbol) {
   }
 
   if (meta.formatType === "currency") {
+    if (meta.key === "aov") {
+      return new Intl.NumberFormat("en-GB", {
+        style: "currency",
+        currency: currencySymbol,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    }
     return formatCurrency(value, currencySymbol);
   }
   if (meta.formatType === "ratio") {
@@ -4347,7 +4382,12 @@ function formatIsoDateLabel(iso) {
 function formatMetricLikeValue(value, content, cfg) {
   const digits = Number.isFinite(content?.valueDigits) ? content.valueDigits : 0;
   if (content?.valueFormat === "currency") {
-    return formatCurrency(value, cfg.currencySymbol);
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: cfg.currencySymbol,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
   }
   if (content?.valueFormat === "percent") {
     const sign = content?.signed && value > 0 ? "+" : "";
@@ -4375,6 +4415,10 @@ function buildAdvancedCellContent(cellKey, payload, cfg) {
   }
 
   const sectionPayload = payload[cellKey];
+
+  if (cellKey === "sales_today") {
+    return buildSalesTodayContent(payload.daily_sales_pace);
+  }
 
   if (cellKey === "top_products_units") {
     return buildTopProductsUnitsContent(sectionPayload, cfg);
@@ -4504,6 +4548,34 @@ function buildDailyPaceContent(payload, cfg) {
       ["Required Daily Pace", formatCurrencySafe(payload && payload.required_daily_pace, cfg)],
       ["Days Remaining", formatNumberSafe(payload && payload.days_remaining, 0)],
     ]),
+  };
+}
+
+function buildSalesTodayContent(payload) {
+  const source = payload?.today_sales_source;
+  const todaySales = source === "shopifyql" || source === "orders_table"
+    ? parseNumber(payload?.today_sales)
+    : NaN;
+  const sourceText = source === "shopifyql"
+    ? "Shopify total sales · Europe/Dublin day"
+    : source === "orders_table"
+      ? "Synced orders · Europe/Dublin day"
+      : "Daily sales source unavailable";
+
+  return {
+    mode: "metric_like",
+    title: "Sales Today",
+    value: todaySales,
+    valueFormat: "currency",
+    valueDigits: 2,
+    valueText: "--",
+    trendPillClass: "trend-pill-flat",
+    changeText: Number.isFinite(todaySales) ? "Today" : "--",
+    trendSummary: Number.isFinite(todaySales) ? "Total sales today so far" : "Daily sales unavailable",
+    trendSummaryClass: "",
+    previousText: sourceText,
+    subtitle: "",
+    body: "",
   };
 }
 
@@ -4656,12 +4728,12 @@ function getMtdComparisonSnapshot(rootPayload) {
   const kpis = rootPayload && typeof rootPayload.kpis === "object" ? rootPayload.kpis : null;
   const currentSales = parseNumber(kpis?.current?.sales_amount);
   const previousSales = parseNumber(kpis?.previous?.sales_amount);
-  const growthPctRaw = parseNumber(kpis?.change?.sales_amount_pct);
+  const displayedGrowthPct = calcPercentChange(currentSales, previousSales);
 
   return {
     currentSales,
     previousSales,
-    growthPct: Number.isFinite(growthPctRaw) ? growthPctRaw : calcPercentChange(currentSales, previousSales),
+    growthPct: displayedGrowthPct,
   };
 }
 
